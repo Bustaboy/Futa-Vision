@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 import hardware_check
 import library as character_library
 import training_orchestrator
+import video_assembly
 from hardware_check import report_to_markdown
 from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, score_partner_candidate, weighted_score
 
@@ -175,7 +176,8 @@ def setup_status() -> str:
         "- Phase 1: SQLite character library, searchable thumbnails, scoring-to-library registration, and scene load plans.",
         "- TODO Phase 1: replace placeholder partner LoRA staging with real Ostris partner datasets/jobs once starter image generation lands.",
         "- TODO Phase 2: add ComfyUI extension checks for IPAdapter, AnimateDiff, Wan extender, LTX, Regional ControlNets, and LayerDiffuse plus RunPod preflight manifests.",
-        "- TODO Phase 2: implement video pipeline submission, clip auto-review, extension, timeline assembly, and final upscaling.",
+        "- Phase 2: video_assembly.py stages Wan/LTX 720p clip generation, smart looping, auto-review, and final upscale manifests.",
+        "- TODO Phase 3: Timeline + Chat Editing with targeted regeneration and timeline version history.",
     ]
     return "\n".join(lines)
 
@@ -260,7 +262,7 @@ def build_generation_plan(
     duration_seconds: int,
     use_runpod: bool,
 ) -> str:
-    """Create a dry-run plan for clip generation before ComfyUI integration exists."""
+    """Compatibility helper that previews the Phase 2 video assembly policy."""
 
     mode = "RunPod cloud offload" if use_runpod else "local_low_vram"
     plan = {
@@ -270,7 +272,8 @@ def build_generation_plan(
         "target_pipeline": pipeline,
         "selected_partners": selected_partners,
         "scene_prompt": scene_prompt,
-        "quality_gate": "discard/regenerate below auto-review score 80",
+        "quality_gate": "Florence-2 auto-review discards/regenerates below score 80",
+        "lora_policy": "General Physics Base LoRA is always loaded before fixed male and partner LoRAs.",
         "fallbacks": [
             "reduce batch size",
             "reduce preview resolution",
@@ -278,9 +281,35 @@ def build_generation_plan(
             "switch preview/final pipeline",
             "offer RunPod offload",
         ],
-        "todo_next": "Phase 2: replace this dry-run plan with ComfyUI workflow submission and clip auto-review.",
+        "next_phase": "TODO Phase 3: Timeline + Chat Editing for targeted regeneration and global edits.",
     }
     return "```json\n" + json.dumps(plan, indent=2) + "\n```"
+
+
+def run_video_generation(
+    scene_prompt: str,
+    selected_partners: str,
+    pipeline: str,
+    scene_layout: str,
+    duration_seconds: int,
+    target_duration_seconds: int,
+    use_runpod: bool,
+    adult_confirmed: bool,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[str, str, str | None]:
+    """Run the Phase 2 video assembly orchestrator from the Generate Video tab."""
+
+    return video_assembly.gradio_build_video_pipeline(
+        scene_prompt=scene_prompt,
+        selected_character_ids=selected_partners,
+        pipeline=pipeline,
+        layout=scene_layout,
+        duration_seconds=duration_seconds,
+        target_duration_seconds=target_duration_seconds,
+        use_runpod=use_runpod,
+        adult_confirmed=adult_confirmed,
+        progress=progress,
+    )
 
 
 def timeline_placeholder(chat_message: str, timeline_notes: str) -> tuple[str, str]:
@@ -386,7 +415,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 1: full SQLite Character Library + enhanced scoring integration."
+            "Phase 2: 720p video generation pipeline + smart looping + final upscale."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
@@ -514,17 +543,41 @@ def build_ui() -> gr.Blocks:
 
             with gr.Tab("Generate Video", id="Generate Video", visible=initial_interactive) as generate_tab:
                 gr.Markdown(
-                    "Create short 5–10 second clips at 720p, auto-review, extend, and send accepted clips to the timeline. "
-                    "TODO Phase 2: submit real ComfyUI Wan/LTX workflows, sample frames for auto-review, quarantine clips below 80, and preserve character library provenance."
+                    "Phase 2 chains `video_assembly.build_video_pipeline()`: fixed male + selected library characters, "
+                    "General Physics Base LoRA plus partner LoRAs, 720p Wan/LTX generation, Florence-2 auto-review, "
+                    "smart loop extension, and final temporal upscale. TODO Phase 3: Timeline + Chat Editing."
                 )
                 scene_prompt = gr.Textbox(label="Scene prompt", lines=5)
-                selected_partners = gr.Textbox(label="Selected library character IDs", placeholder="partner_0001, partner_0002")
-                pipeline = gr.Radio(["ltx-2.3-preview", "wan-2.7-physics"], value="ltx-2.3-preview", label="Pipeline")
-                duration = gr.Slider(5, 10, value=5, step=1, label="Clip duration seconds")
-                use_runpod = gr.Checkbox(label="Offload this job to RunPod", value=False)
-                generate_plan = gr.Button("Build dry-run generation plan", variant="primary", interactive=initial_interactive)
+                with gr.Row():
+                    selected_partners = gr.Textbox(
+                        label="Selected library character IDs",
+                        placeholder="partner_0001, partner_0002 (fixed male auto-loads when registered)",
+                        scale=2,
+                    )
+                    scene_layout = gr.Radio(
+                        ["single", "threesome", "gangbang"],
+                        value="single",
+                        label="Scene layout from Character Library",
+                        scale=1,
+                    )
+                with gr.Row():
+                    pipeline = gr.Radio(
+                        ["wan-2.7-physics", "ltx-2.3-preview"],
+                        value="wan-2.7-physics",
+                        label="Pipeline selector (Wan for physics, LTX for speed)",
+                    )
+                    duration = gr.Slider(5, 10, value=8, step=1, label="Short clip duration seconds")
+                    target_duration = gr.Slider(10, 60, value=20, step=1, label="Smart-loop target seconds")
+                use_runpod = gr.Checkbox(label="Offload this job to RunPod / use RunPod after OOM", value=False)
+                generate_plan = gr.Button("Generate Video Pipeline", variant="primary", interactive=initial_interactive)
                 plan_output = gr.Markdown()
-                generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, use_runpod], outputs=plan_output)
+                pipeline_json = gr.Code(label="Pipeline result JSON", language="json")
+                final_video = gr.Video(label="Final upscaled video artifact")
+                generate_plan.click(
+                    run_video_generation,
+                    inputs=[scene_prompt, selected_partners, pipeline, scene_layout, duration, target_duration, use_runpod, adult_confirmed],
+                    outputs=[plan_output, pipeline_json, final_video],
+                )
 
             with gr.Tab("Timeline", id="Timeline", visible=initial_interactive) as timeline_tab:
                 gr.Markdown(
@@ -591,6 +644,6 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# TODO Phase 2: add ComfyUI workflow clients, video assembly, RunPod offload,
-# clip auto-review, and timeline provenance modules with tests.
-# TODO Phase 2: map library scene plans to Regional ControlNets and LayerDiffuse masks.
+# Phase 2: video_assembly.py now stages ComfyUI/RunPod-ready video manifests with tests.
+# TODO Phase 3: add timeline model, chat_parser.py, targeted regeneration, and global edit controls.
+# TODO Phase 3: map accepted clip manifests into draggable timeline tracks and chat-addressable ranges.
