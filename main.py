@@ -93,11 +93,8 @@ def gate_update(confirmed: bool) -> list[Any]:
     return [
         adult_confirmation_status(confirmed),
         gr.update(visible=not unlocked),
-        gr.update(visible=unlocked),
-        gr.update(visible=unlocked),
-        gr.update(visible=unlocked),
-        gr.update(visible=unlocked),
-        gr.update(visible=unlocked),
+        *[gr.update(visible=not unlocked) for _ in range(5)],
+        *[gr.update(visible=unlocked) for _ in range(5)],
         *[gr.update(interactive=unlocked) for _ in range(4)],
     ]
 
@@ -175,6 +172,8 @@ def setup_status() -> str:
         "- Phase 0: merged baseline Gradio shell, scoring math, setup detection, and hardware reporting.",
         "- TODO Phase 0.5: validate Ostris-produced checkpoints, add sample-image validation, and archive validation scores next to metadata.",
         "- TODO Phase 1: replace placeholder library JSON with SQLite/JSON CRUD, searchable thumbnails, weighted scoring grid persistence, and Ostris partner training jobs.",
+        "- TODO Phase 1: add a first-run wizard that registers fixed male, General Physics LoRA, and partner LoRAs into the persistent library index.",
+        "- TODO Phase 1: load the approved General Physics LoRA automatically before partner starter-image generation and partner LoRA training.",
         "- TODO Phase 2: add ComfyUI extension checks for IPAdapter, AnimateDiff, Wan extender, LTX, Regional ControlNets, and LayerDiffuse plus RunPod preflight manifests.",
     ]
     return "\n".join(lines)
@@ -459,11 +458,16 @@ def build_ui() -> gr.Blocks:
             gr.Markdown(phase0_test_markdown())
 
         with gr.Tab("Train General Physics LoRA"):
+            with gr.Group(visible=not initial_interactive) as training_locked_group:
+                gr.Markdown(
+                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access the training workflow."
+                )
             with gr.Group(visible=initial_interactive) as training_group:
                 gr.Markdown(
                     "Train the Phase 0.5 identity-neutral General Physics/Anatomy Base LoRA using Ostris AI Toolkit. "
                     "Captions are strictly physics-focused: contact, pressure, deformation, balance, joint alignment, and motion arcs only. "
-                    "TODO Phase 0.5: add validation sample generation and score persistence after real checkpoint discovery is verified."
+                    "TODO Phase 0.5: add validation sample generation and score persistence after real checkpoint discovery is verified. "
+                    "TODO Phase 1: auto-register the accepted LoRA in the persistent library and load it before partner workflows."
                 )
                 dataset_status = gr.Markdown()
                 refresh_dataset = gr.Button(
@@ -527,10 +531,15 @@ def build_ui() -> gr.Blocks:
                 )
 
         with gr.Tab("Library"):
+            with gr.Group(visible=not initial_interactive) as library_locked_group:
+                gr.Markdown(
+                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to browse LoRA/library records."
+                )
             with gr.Group(visible=initial_interactive) as library_group:
                 gr.Markdown(
                     "Browse fixed male, General Physics/Anatomy Base LoRA, and partner records. "
-                    "TODO Phase 1: replace placeholder JSON with SQLite-backed thumbnails, tags, favorites, and one-click LoRA loading."
+                    "TODO Phase 1: replace placeholder JSON with SQLite-backed thumbnails, tags, favorites, and one-click LoRA loading. "
+                    "TODO Phase 1: add import/backup/version controls for every registered LoRA."
                 )
                 library_search = gr.Textbox(label="Search by id, name, type, or tag")
                 library_output = gr.Code(label="Library records", language="json")
@@ -540,12 +549,17 @@ def build_ui() -> gr.Blocks:
                 demo.load(library_json, outputs=library_output)
 
         with gr.Tab("Create Partner"):
+            with gr.Group(visible=not initial_interactive) as partner_locked_group:
+                gr.Markdown(
+                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access partner creation."
+                )
             with gr.Group(visible=initial_interactive) as partner_group:
                 gr.Markdown(
                     "Generate 10–20 starter images, manually score Anatomy/Physics/Style, "
                     "and train a partner LoRA when the last-10 average reaches 80+. "
                     "TODO Phase 0.5: load the approved General Physics/Anatomy Base LoRA before partner image generation. "
-                    "TODO Phase 1: persist score rows and launch Ostris training when approved."
+                    "TODO Phase 1: persist score rows and launch Ostris training when approved. "
+                    "TODO Phase 1: require the approved General Physics LoRA before partner generation begins."
                 )
                 partner_prompt = gr.Textbox(label="Partner prompt", lines=4)
                 base_image = gr.Image(label="Optional base image", type="filepath")
@@ -574,6 +588,10 @@ def build_ui() -> gr.Blocks:
                 )
 
         with gr.Tab("Generate Video"):
+            with gr.Group(visible=not initial_interactive) as generate_locked_group:
+                gr.Markdown(
+                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access generation planning."
+                )
             with gr.Group(visible=initial_interactive) as generate_group:
                 gr.Markdown(
                     "Create short 5–10 second clips at 720p, auto-review, extend, and send accepted clips to the timeline. "
@@ -614,6 +632,10 @@ def build_ui() -> gr.Blocks:
                 )
 
         with gr.Tab("Timeline"):
+            with gr.Group(visible=not initial_interactive) as timeline_locked_group:
+                gr.Markdown(
+                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access timeline editing."
+                )
             with gr.Group(visible=initial_interactive) as timeline_group:
                 gr.Markdown(
                     "Playable timeline placeholder with edit chat. "
@@ -643,6 +665,11 @@ def build_ui() -> gr.Blocks:
             outputs=[
                 confirmation_status,
                 adult_gate_banner,
+                training_locked_group,
+                library_locked_group,
+                partner_locked_group,
+                generate_locked_group,
+                timeline_locked_group,
                 training_group,
                 library_group,
                 partner_group,
@@ -673,3 +700,4 @@ if __name__ == "__main__":
 # TODO Phase 0.5: add validation-sample scoring for the General Physics LoRA.
 # TODO Phase 1: split placeholders into `library_index.py`, `comfy_client.py`,
 # `video_assembly.py`, `chat_parser.py`, and `runpod_client.py` with tests.
+# TODO Phase 1: persist General Physics LoRA approval metadata before enabling partner workflows.

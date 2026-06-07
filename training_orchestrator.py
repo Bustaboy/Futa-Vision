@@ -81,6 +81,31 @@ FORBIDDEN_CAPTION_TERMS = {
     "anime",
     "realistic",
 }
+IDENTITY_DESCRIPTOR_PATTERNS = [
+    # Hair/eye/skin/clothing/style descriptors are stripped before validation so
+    # otherwise-useful user captions can be converted into physics-only labels.
+    r"\b(?:blonde|brown|brunette|black|white|red|blue|green|pink|purple|silver|gray|grey)\s+hair\b",
+    r"\bhair\s+(?:color|style|length|texture)\b",
+    r"\b(?:blue|green|brown|black|gray|grey|red|hazel|amber)\s+eyes?\b",
+    r"\beyes?\s+(?:color|shape)\b",
+    r"\b(?:tan|tanned|pale|fair|dark|light|brown|white|black|olive)\s+skin\b",
+    r"\bskin\s+(?:tone|color|texture)\b",
+    r"\b(?:blonde|brown|brunette|black|white|red|blue|green|pink|purple|silver|gray|grey)\s+(?:shirt|dress|outfit|costume|clothing|wardrobe|uniform|jacket|pants|skirt)\b",
+    r"\b(?:shirt|dress|outfit|costume|clothing|wardrobe|uniform|jacket|pants|skirt)\b",
+    r"\b(?:anime|realistic|semi realistic|cartoon|illustration|render|style)\b",
+    r"\b(?:named|specific|recognizable|famous)\s+(?:person|character|identity)\b",
+    r"\b(?:person name|character name|identity|face|facial|iris|eyes?|hair|skin)\b",
+]
+FILLER_TERMS_AFTER_DESCRIPTOR_REMOVAL = {
+    "a",
+    "an",
+    "and",
+    "the",
+    "with",
+    "without",
+    "plus",
+    "only",
+}
 PHYSICS_CAPTION_KEYWORDS = {
     "alignment",
     "anatomy",
@@ -193,8 +218,16 @@ def sanitize_physics_caption(caption: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9+./ -]+", " ", caption.lower())
     normalized = re.sub(r"[,_;:()\[\]{}]+", " ", normalized)
     cleaned = " ".join(normalized.split())
+
+    for pattern in IDENTITY_DESCRIPTOR_PATTERNS:
+        cleaned = re.sub(pattern, " ", cleaned)
+    cleaned = " ".join(
+        token
+        for token in cleaned.split()
+        if token not in FILLER_TERMS_AFTER_DESCRIPTOR_REMOVAL
+    )
     if not cleaned:
-        raise ValueError("Caption is empty after normalization.")
+        raise ValueError("Caption is empty after identity descriptor removal.")
 
     forbidden_hits = sorted(
         term
@@ -203,7 +236,8 @@ def sanitize_physics_caption(caption: str) -> str:
     )
     if forbidden_hits:
         raise ValueError(
-            "Caption includes non-physics terms: " + ", ".join(forbidden_hits)
+            "Caption includes non-physics terms after descriptor removal: "
+            + ", ".join(forbidden_hits)
         )
 
     if not any(
@@ -636,7 +670,7 @@ def _run_ostris(
         _emit(
             progress_callback,
             0.55,
-            "Ostris command not configured; writing reproducible config and dev placeholder artifact.",
+            "Ostris not found. Created placeholder config file. Please install Ostris to train.",
             logs,
         )
         return 0
@@ -714,6 +748,7 @@ def train_general_physics_lora(
         output = Path(output_dir)
         artifact = _next_artifact(output)
         command = _find_ostris_command(artifact.config_path)
+        ostris_missing = not command
         job = TrainingJob(
             dataset_path=str(prepared_dataset),
             output_dir=str(output),
@@ -759,7 +794,7 @@ def train_general_physics_lora(
             _emit(
                 progress_callback,
                 0.85,
-                "Created placeholder safetensors artifact for UI smoke testing; replace with real Ostris output in production.",
+                "Ostris not found. Created placeholder config file. Please install Ostris to train.",
                 logs,
             )
 
@@ -777,6 +812,15 @@ def train_general_physics_lora(
             **asdict(job),
             "dataset_summary": summary,
             "artifact": job.artifact,
+            "ostris_missing": ostris_missing,
+            "fallback_message": (
+                "Ostris not found. Created placeholder config file. Please install Ostris to train."
+                if ostris_missing
+                else "Ostris training command completed."
+            ),
+            "success_message": (
+                f"Saved General Physics LoRA to {job.artifact['lora_path']} and metadata to {job.artifact['metadata_path']}."
+            ),
             "notes": [
                 "General Physics/Anatomy Base LoRA for reusable motion/contact priors.",
                 "Captions intentionally exclude identity, color, hair, clothing, and character details.",
@@ -786,10 +830,12 @@ def train_general_physics_lora(
         artifact.metadata_path.write_text(
             json.dumps(metadata, indent=2), encoding="utf-8"
         )
+        success_message = metadata["success_message"]
+        print(success_message)
         _emit(
             progress_callback,
             1.0,
-            f"Success. Saved LoRA to {artifact.lora_path.resolve()}.",
+            success_message,
             logs,
         )
         return {
@@ -857,7 +903,11 @@ def gradio_train_general_physics_lora(
     )
     if result.get("ok"):
         artifact = result["artifact"]
-        status = f"## ✅ Training complete\nSaved LoRA: `{artifact['lora_path']}`\n\nMetadata: `{artifact['metadata_path']}`"
+        status = (
+            "## ✅ Training complete\n"
+            f"**Saved LoRA (.safetensors):** `{artifact['lora_path']}`\n\n"
+            f"**Saved metadata:** `{artifact['metadata_path']}`"
+        )
     else:
         status = f"## ❌ Training failed\n{result.get('error', 'Unknown error')}"
     return (

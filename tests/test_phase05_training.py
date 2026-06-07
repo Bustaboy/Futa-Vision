@@ -23,14 +23,36 @@ def test_sanitize_physics_caption_normalizes_physics_only_text() -> None:
     )
 
 
-def test_sanitize_physics_caption_rejects_identity_color_and_style_terms() -> None:
-    """General-physics captions must not include identity, color, hair, or style traits."""
+def test_sanitize_physics_caption_removes_identity_descriptors() -> None:
+    """General-physics captions should strip identity descriptors and keep physics terms."""
+
+    caption = "blonde hair, blue eyes, tan skin, white dress with joint alignment and contact pressure"
+
+    sanitized = trainer.sanitize_physics_caption(caption)
+
+    assert sanitized == "joint alignment contact pressure"
+    for identity_term in [
+        "blonde",
+        "hair",
+        "blue",
+        "eyes",
+        "tan",
+        "skin",
+        "white",
+        "dress",
+    ]:
+        assert identity_term not in sanitized
+
+
+def test_sanitize_physics_caption_rejects_remaining_identity_color_and_style_terms() -> (
+    None
+):
+    """Unsafe leftover identity/color/style labels should still fail validation."""
 
     unsafe_captions = [
-        "red hair with joint alignment",
-        "named character pose with contact pressure",
-        "anime style anatomy pose",
-        "white dress with balanced pose",
+        "red surface contact pressure",
+        "green balance pose",
+        "character pose with contact pressure",
     ]
 
     for caption in unsafe_captions:
@@ -91,8 +113,10 @@ def test_bundled_dataset_repairs_missing_and_invalid_captions(tmp_path) -> None:
     assert summary["invalid_captions"] == []
 
 
-def test_prepare_general_physics_dataset_rejects_invalid_user_caption(tmp_path) -> None:
-    """User datasets should preserve strict caption validation instead of auto-overwriting."""
+def test_prepare_general_physics_dataset_sanitizes_identity_descriptors(
+    tmp_path,
+) -> None:
+    """User datasets should remove identity descriptors while preserving physics labels."""
 
     dataset = trainer.ensure_bundled_general_physics_dataset(
         tmp_path / "seed", image_count=20
@@ -102,13 +126,18 @@ def test_prepare_general_physics_dataset_rejects_invalid_user_caption(tmp_path) 
     image = next(dataset.glob("*.png"))
     target_image = user_dataset / "custom.png"
     target_image.write_bytes(image.read_bytes())
-    target_image.with_suffix(".txt").write_text("blue outfit with balanced joint pose")
+    target_caption = target_image.with_suffix(".txt")
+    target_caption.write_text(
+        "blue outfit with balanced joint pose and contact pressure"
+    )
 
-    with pytest.raises(ValueError, match="non-physics terms"):
-        trainer.prepare_general_physics_dataset(
-            dataset_path=user_dataset,
-            use_bundled_dataset=False,
-        )
+    _prepared, summary = trainer.prepare_general_physics_dataset(
+        dataset_path=user_dataset,
+        use_bundled_dataset=False,
+    )
+
+    assert summary["invalid_captions"] == []
+    assert target_caption.read_text().strip() == "balanced joint pose contact pressure"
 
 
 def test_low_vram_settings_are_deterministic_for_8gb_gpu(monkeypatch) -> None:
@@ -170,3 +199,11 @@ def test_train_general_physics_lora_stages_versioned_artifact(tmp_path) -> None:
     metadata = json.loads(Path(artifact["metadata_path"]).read_text())
     assert metadata["caption_policy"].startswith("strict physics/anatomy captions")
     assert metadata["dataset_summary"]["invalid_captions"] == []
+    assert metadata["success_message"].endswith(
+        f"metadata to {artifact['metadata_path']}."
+    )
+    assert any(
+        "Ostris not found. Created placeholder config file. Please install Ostris to train."
+        in line
+        for line in result["logs"]
+    )

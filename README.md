@@ -52,3 +52,15 @@ The current Phase 0 implementation is a runnable Gradio-first skeleton that mirr
 ### Developer test dependencies
 
 `pytest` is exposed through the `dev` extra in `setup.py` and pinned in `requirements.txt` for the Phase 0 smoke-test path.
+
+## Phase 0.5 Completed
+
+Phase 0.5 adds the General Physics/Anatomy Base LoRA training path: a neutral bundled dataset builder, strict physics-only caption sanitization, low-VRAM Ostris training defaults, Gradio training controls, versioned `.safetensors`/metadata outputs, and a safe placeholder config path when Ostris is not installed.
+
+One-line test command:
+
+```bash
+python -m pytest -q
+```
+
+Next implementation target: Phase 1 will turn the placeholder library into persistent LoRA/library indexing, register the approved General Physics LoRA, and use it automatically before partner generation and partner LoRA training.
