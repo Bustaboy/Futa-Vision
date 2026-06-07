@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 import hardware_check
 import library as character_library
 import training_orchestrator
+import video_assembly
 from hardware_check import report_to_markdown
 from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, score_partner_candidate, weighted_score
 
@@ -221,6 +222,33 @@ def create_partner_tab_hint() -> dict[str, Any]:
     return gr.update(selected="Create Partner")
 
 
+def preview_scene_characters(selected_character_ids: str) -> tuple[list[tuple[str, str]], str]:
+    """Preview selected Character Library thumbnails before video generation."""
+
+    ids = [item.strip() for item in character_library.normalize_string_list(selected_character_ids)]
+    records = []
+    missing: list[str] = []
+    fixed = character_library.search_library(character_type="fixed_male", limit=1)
+    if fixed and fixed[0].id not in ids:
+        ids.insert(0, fixed[0].id)
+    for character_id in ids:
+        record = character_library.get_character(character_id)
+        if record is None:
+            missing.append(character_id)
+        else:
+            records.append(record)
+    gallery = character_library.characters_to_gallery(records)
+    if not records and not missing:
+        return [], "No character IDs selected yet. Copy IDs from the Character Library tab to preview them here."
+    lines = ["## Scene character preview"]
+    if records:
+        lines.append("Loaded before generation: " + ", ".join(f"`{record.id}`" for record in records))
+    if missing:
+        lines.append("Missing IDs: " + ", ".join(f"`{item}`" for item in missing))
+    lines.append("The locked fixed male is included automatically when registered, matching `video_assembly.generate_short_clip()`.")
+    return gallery, "\n".join(lines)
+
+
 def score_partner_batch(
     anatomy: float,
     physics: float,
@@ -260,27 +288,54 @@ def build_generation_plan(
     duration_seconds: int,
     use_runpod: bool,
 ) -> str:
-    """Create a dry-run plan for clip generation before ComfyUI integration exists."""
+    """Create a hardware-aware Phase 2 preview plan without launching generation."""
 
-    mode = "RunPod cloud offload" if use_runpod else "local_low_vram"
+    settings = hardware_check.get_low_vram_settings()
+    mode = "RunPod cloud offload" if use_runpod else settings["mode"]
+    normalized_pipeline = "wan" if pipeline.lower().startswith("wan") else "ltx"
     plan = {
         "mode": mode,
-        "resolution": "1280x720 (720p) local default; final upscale with SeedVR 2.5 / RTX Video SR / Nomos2 after assembly",
+        "resolution": f"{settings.get('resolution', '1280x720')} local default; final upscale with SeedVR 2.5 / RTX Video SR / Nomos2 after assembly",
         "clip_duration_seconds": min(max(duration_seconds, 5), 10),
-        "target_pipeline": pipeline,
-        "selected_partners": selected_partners,
+        "target_pipeline": normalized_pipeline,
+        "pipeline_reason": "Wan for physics" if normalized_pipeline == "wan" else "LTX for speed",
+        "selected_character_ids": selected_partners,
         "scene_prompt": scene_prompt,
-        "quality_gate": "discard/regenerate below auto-review score 80",
+        "quality_gate": "Florence-2 auto-review discards/regenerates below score 80",
+        "required_loras": "General Physics Base LoRA first, then fixed male + every selected partner LoRA",
+        "consistency_modules": ["MotionDirector", "IP-Adapter FaceID", "Phantom"],
         "fallbacks": [
-            "reduce batch size",
-            "reduce preview resolution",
-            "enable stronger quantization",
-            "switch preview/final pipeline",
-            "offer RunPod offload",
+            "retry at 960x540 on local OOM",
+            "enable stronger FP8/GGUF/INT8 quantization",
+            "offer RunPod offload with explicit user confirmation",
         ],
-        "todo_next": "Phase 2: replace this dry-run plan with ComfyUI workflow submission and clip auto-review.",
+        "phase3_todos": video_assembly.PHASE3_TODOS,
     }
     return "```json\n" + json.dumps(plan, indent=2) + "\n```"
+
+
+def run_video_generation_pipeline(
+    scene_prompt: str,
+    selected_character_ids: str,
+    scene_type: str,
+    pipeline: str,
+    duration_seconds: int,
+    target_duration: int,
+    use_runpod: bool,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[str, str, str | None]:
+    """Launch the Phase 2 video assembly orchestrator from Gradio."""
+
+    return video_assembly.gradio_build_video_pipeline(
+        scene_prompt=scene_prompt,
+        selected_character_ids=selected_character_ids,
+        scene_type=scene_type,
+        pipeline=pipeline,
+        duration_seconds=duration_seconds,
+        target_duration=target_duration,
+        use_runpod=use_runpod,
+        progress=progress,
+    )
 
 
 def timeline_placeholder(chat_message: str, timeline_notes: str) -> tuple[str, str]:
@@ -386,7 +441,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 1: full SQLite Character Library + enhanced scoring integration."
+            "Phase 2: video generation pipeline with 720p smart looping and final upscale."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
@@ -514,23 +569,42 @@ def build_ui() -> gr.Blocks:
 
             with gr.Tab("Generate Video", id="Generate Video", visible=initial_interactive) as generate_tab:
                 gr.Markdown(
-                    "Create short 5–10 second clips at 720p, auto-review, extend, and send accepted clips to the timeline. "
-                    "TODO Phase 2: submit real ComfyUI Wan/LTX workflows, sample frames for auto-review, quarantine clips below 80, and preserve character library provenance."
+                    "Create 5–10 second clips at 720p, auto-review with Florence-2, smart-loop to longer segments, "
+                    "and upscale using SeedVR 2.5 / RTX Video SR / Nomos2. The selected ids should come from the Character Library tab; "
+                    "`library.load_for_scene()` will add the locked fixed male when available and load every partner LoRA on top of the General Physics Base LoRA. "
+                    "Phase 3 TODOs: import VideoJobResult sidecars into Timeline, route chat edits to job_id/time ranges, and version replacement clips."
                 )
                 scene_prompt = gr.Textbox(label="Scene prompt", lines=5)
-                selected_partners = gr.Textbox(label="Selected library character IDs", placeholder="partner_0001, partner_0002")
-                pipeline = gr.Radio(["ltx-2.3-preview", "wan-2.7-physics"], value="ltx-2.3-preview", label="Pipeline")
-                duration = gr.Slider(5, 10, value=5, step=1, label="Clip duration seconds")
-                use_runpod = gr.Checkbox(label="Offload this job to RunPod", value=False)
-                generate_plan = gr.Button("Build dry-run generation plan", variant="primary", interactive=initial_interactive)
+                selected_partners = gr.Textbox(label="Selected library character IDs from Character Library", placeholder="partner_0001, partner_0002")
+                preview_characters = gr.Button("Preview selected characters", variant="secondary", interactive=initial_interactive)
+                selected_preview_gallery = gr.Gallery(label="Selected character preview", columns=4, height=220)
+                selected_preview_status = gr.Markdown()
+                selected_partners.change(preview_scene_characters, inputs=selected_partners, outputs=[selected_preview_gallery, selected_preview_status])
+                preview_characters.click(preview_scene_characters, inputs=selected_partners, outputs=[selected_preview_gallery, selected_preview_status])
+                scene_type = gr.Radio(["single", "threesome", "gangbang"], value="single", label="Scene layout")
+                pipeline = gr.Radio(["LTX for speed", "Wan for physics"], value="LTX for speed", label="Pipeline selector")
+                with gr.Row():
+                    duration = gr.Slider(5, 10, value=8, step=1, label="Short clip duration seconds")
+                    target_duration = gr.Slider(10, 60, value=20, step=1, label="Smart-loop target seconds")
+                use_runpod = gr.Checkbox(label="Allow RunPod cloud fallback/offload for OOM", value=False)
+                with gr.Row():
+                    generate_plan = gr.Button("Build generation plan", variant="secondary", interactive=initial_interactive)
+                    generate_video = gr.Button("Generate Video", variant="primary", interactive=initial_interactive)
                 plan_output = gr.Markdown()
+                pipeline_json = gr.Code(label="Pipeline result / manifest", language="json")
+                final_video_file = gr.File(label="Final upscaled video placeholder")
                 generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, use_runpod], outputs=plan_output)
+                generate_video.click(
+                    run_video_generation_pipeline,
+                    inputs=[scene_prompt, selected_partners, scene_type, pipeline, duration, target_duration, use_runpod],
+                    outputs=[plan_output, pipeline_json, final_video_file],
+                )
 
             with gr.Tab("Timeline", id="Timeline", visible=initial_interactive) as timeline_tab:
                 gr.Markdown(
                     "Playable timeline placeholder with edit chat. "
                     "TODO Phase 2: add clip provenance, reorder/trim/replace metadata, final upscale export, and video pipeline status queues. "
-                    "TODO Phase 3: connect chat edits to targeted regeneration and timeline version history."
+                    "TODO Phase 3: connect chat edits to VideoJobResult job_id/time ranges, targeted regeneration, timeline version history, and review deltas."
                 )
                 timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=10)
                 chat_message = gr.Textbox(label="Chat edit request", placeholder="Fix this transition or slow the whole scene down.")
@@ -549,6 +623,8 @@ def build_ui() -> gr.Blocks:
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(selected="Setup" if not unlocked else "Character Library"),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
@@ -573,6 +649,8 @@ def build_ui() -> gr.Blocks:
                 create_partner_shortcut,
                 score_button,
                 generate_plan,
+                generate_video,
+                preview_characters,
             ],
         )
 
