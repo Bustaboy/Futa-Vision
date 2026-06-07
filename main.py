@@ -9,6 +9,7 @@ integrations are implemented.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from dataclasses import asdict, dataclass, field
@@ -351,7 +352,7 @@ async def parse_timeline_chat_edit(chat_message: str, timeline_state_json: str, 
         timeline_state = json.loads(timeline_state_json) if timeline_state_json else {}
     except json.JSONDecodeError:
         timeline_state = {}
-    intent = await chat_parser.parse_chat_command(chat_message, timeline_state)
+    intent = await asyncio.to_thread(chat_parser.parse_chat_command, chat_message, timeline_state)
     event = {
         "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "phase": "3.2_chat_parser",
