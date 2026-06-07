@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -54,6 +55,8 @@ PHYSICS_CAPTION_BANK = [
     "joint chain pose showing clean anatomy landmarks and motion arc",
     "neutral physics reference with readable silhouette and proportional structure",
 ]
+MIN_NEUTRAL_DATASET_IMAGES = 20
+MAX_NEUTRAL_DATASET_IMAGES = 30
 FORBIDDEN_CAPTION_TERMS = {
     "red",
     "blue",
@@ -64,11 +67,61 @@ FORBIDDEN_CAPTION_TERMS = {
     "brunette",
     "hair",
     "eyes",
+    "iris",
+    "face",
     "identity",
     "person name",
     "character",
     "costume",
     "clothing",
+    "shirt",
+    "dress",
+    "outfit",
+    "style",
+    "anime",
+    "realistic",
+}
+PHYSICS_CAPTION_KEYWORDS = {
+    "alignment",
+    "anatomy",
+    "balance",
+    "balanced",
+    "bend",
+    "center",
+    "collision",
+    "compressed",
+    "compression",
+    "contact",
+    "counterbalance",
+    "deformation",
+    "elastic",
+    "extension",
+    "flattening",
+    "force",
+    "geometry",
+    "gravity",
+    "inertia",
+    "joint",
+    "limb",
+    "mass",
+    "momentum",
+    "motion",
+    "pelvis",
+    "pose",
+    "pressure",
+    "proportional",
+    "rotation",
+    "soft",
+    "spine",
+    "stance",
+    "stretch",
+    "support",
+    "surface",
+    "tension",
+    "torso",
+    "transfer",
+    "volume",
+    "weight",
 }
 ProgressCallback = Callable[[float, str], None]
 
@@ -128,16 +181,45 @@ def _validate_rank(rank: int) -> int:
     return rank
 
 
-def _sanitize_caption(caption: str) -> str:
-    """Reject identity/style/color details so captions remain physics-focused."""
+def sanitize_physics_caption(caption: str) -> str:
+    """Normalize and validate a strict physics/anatomy-only caption.
 
-    cleaned = " ".join(caption.lower().replace(",", " ").split())
-    forbidden_hits = [term for term in FORBIDDEN_CAPTION_TERMS if term in cleaned]
+    Phase 0.5 captions are intentionally identity-neutral. This helper rejects
+    color, hair, clothing, named-character, style, and other appearance terms,
+    and it also requires at least one physics/anatomy keyword so user-supplied
+    dataset captions do not drift into identity or art-direction labels.
+    """
+
+    normalized = re.sub(r"[^a-zA-Z0-9+./ -]+", " ", caption.lower())
+    normalized = re.sub(r"[,_;:()\[\]{}]+", " ", normalized)
+    cleaned = " ".join(normalized.split())
+    if not cleaned:
+        raise ValueError("Caption is empty after normalization.")
+
+    forbidden_hits = sorted(
+        term
+        for term in FORBIDDEN_CAPTION_TERMS
+        if re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", cleaned)
+    )
     if forbidden_hits:
         raise ValueError(
-            f"Caption includes non-physics terms: {', '.join(sorted(forbidden_hits))}"
+            "Caption includes non-physics terms: " + ", ".join(forbidden_hits)
+        )
+
+    if not any(
+        re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", cleaned)
+        for keyword in PHYSICS_CAPTION_KEYWORDS
+    ):
+        raise ValueError(
+            "Caption must include at least one physics/anatomy keyword such as joint, contact, pressure, balance, or deformation."
         )
     return cleaned
+
+
+def _sanitize_caption(caption: str) -> str:
+    """Backward-compatible private alias for the public sanitizer."""
+
+    return sanitize_physics_caption(caption)
 
 
 def _write_png(
@@ -264,29 +346,82 @@ def _neutral_image(index: int, path: Path, size: int = 256) -> None:
     _write_png(path, size, size, pixels)
 
 
+def _image_files(path: Path) -> list[Path]:
+    """Return supported image files in stable training order."""
+
+    if not path.exists():
+        return []
+    return sorted(
+        item
+        for item in path.iterdir()
+        if item.is_file() and item.suffix.lower() in ALLOWED_IMAGE_EXTENSIONS
+    )
+
+
+def _clamp_neutral_image_count(image_count: int) -> int:
+    """Keep the bundled starter dataset inside the requested 20-30 image range."""
+
+    return min(MAX_NEUTRAL_DATASET_IMAGES, max(MIN_NEUTRAL_DATASET_IMAGES, image_count))
+
+
+def _caption_for_index(index: int) -> str:
+    """Return a sanitized physics-only caption from the reusable caption bank."""
+
+    return sanitize_physics_caption(
+        PHYSICS_CAPTION_BANK[index % len(PHYSICS_CAPTION_BANK)]
+    )
+
+
+def _ensure_caption_for_image(
+    image_path: Path, index: int, overwrite_invalid: bool = True
+) -> None:
+    """Ensure an image has a valid same-name physics-only caption sidecar."""
+
+    caption_path = image_path.with_suffix(".txt")
+    if caption_path.exists():
+        try:
+            caption_path.write_text(
+                sanitize_physics_caption(caption_path.read_text()) + "\n"
+            )
+            return
+        except ValueError:
+            if not overwrite_invalid:
+                raise
+    caption_path.write_text(_caption_for_index(index) + "\n")
+
+
 def ensure_bundled_general_physics_dataset(
     dataset_dir: str | Path = DEFAULT_DATASET_DIR, image_count: int = 25
 ) -> Path:
-    """Create the bundled identity-neutral Phase 0.5 dataset when empty."""
+    """Create or repair the bundled identity-neutral Phase 0.5 dataset.
+
+    The bundled set is kept intentionally small and neutral: 20-30 abstract
+    anatomy/physics references with same-name captions. If users delete files
+    or leave missing/invalid captions, this function repairs the dataset without
+    overwriting valid user-provided images.
+    """
 
     dataset_path = Path(dataset_dir)
     dataset_path.mkdir(parents=True, exist_ok=True)
-    existing_images = [
-        p
-        for p in dataset_path.iterdir()
-        if p.suffix.lower() in ALLOWED_IMAGE_EXTENSIONS
-    ]
-    if existing_images:
-        return dataset_path
+    target_count = _clamp_neutral_image_count(image_count)
+    images = _image_files(dataset_path)
 
-    for index in range(image_count):
+    for index in range(len(images), target_count):
         image_path = dataset_path / f"physics_reference_{index + 1:02d}.png"
-        caption_path = image_path.with_suffix(".txt")
         _neutral_image(index, image_path)
-        caption_path.write_text(
-            _sanitize_caption(PHYSICS_CAPTION_BANK[index % len(PHYSICS_CAPTION_BANK)])
-            + "\n"
-        )
+        images.append(image_path)
+
+    for index, image_path in enumerate(_image_files(dataset_path)):
+        _ensure_caption_for_image(image_path, index)
+
+    manifest = {
+        "dataset": "general_physics",
+        "phase": "0.5",
+        "caption_policy": "physics/anatomy only; no identity, color, hair, clothing, character, or style terms",
+        "image_count": len(_image_files(dataset_path)),
+        "updated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+    }
+    (dataset_path / "dataset_manifest.json").write_text(json.dumps(manifest, indent=2))
     return dataset_path
 
 
@@ -300,50 +435,100 @@ def _prepare_uploaded_dataset(
         return None
     target = Path(target_dir)
     target.mkdir(parents=True, exist_ok=True)
+    copied_index = len(_image_files(target))
     for file_name in uploaded_files:
         src = Path(file_name)
         if src.suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS:
             continue
         dest = target / src.name
         shutil.copy2(src, dest)
-        caption = PHYSICS_CAPTION_BANK[
-            (len(list(target.glob("*.txt"))) + 1) % len(PHYSICS_CAPTION_BANK)
-        ]
-        dest.with_suffix(".txt").write_text(_sanitize_caption(caption) + "\n")
+        _ensure_caption_for_image(dest, copied_index)
+        copied_index += 1
+    if not _image_files(target):
+        raise ValueError(
+            "No supported image files were uploaded for the training dataset."
+        )
     return target
+
+
+def prepare_general_physics_dataset(
+    dataset_path: str | Path | None = None,
+    uploaded_files: list[str] | None = None,
+    use_bundled_dataset: bool = True,
+) -> tuple[Path, dict[str, Any]]:
+    """Resolve, prepare, and validate the dataset for Phase 0.5 training."""
+
+    uploaded_dataset = _prepare_uploaded_dataset(uploaded_files)
+    if uploaded_dataset is not None:
+        chosen = uploaded_dataset
+    elif use_bundled_dataset or dataset_path is None:
+        chosen = ensure_bundled_general_physics_dataset()
+    else:
+        chosen = Path(dataset_path)
+        if not chosen.exists():
+            raise FileNotFoundError(f"Dataset path does not exist: {chosen}")
+        for index, image_path in enumerate(_image_files(chosen)):
+            _ensure_caption_for_image(image_path, index, overwrite_invalid=False)
+
+    summary = dataset_summary(chosen)
+    if summary["images"] == 0:
+        raise ValueError("Dataset must contain at least one supported image file.")
+    if summary["invalid_captions"]:
+        raise ValueError(
+            "Dataset contains invalid physics captions: "
+            + ", ".join(summary["invalid_captions"])
+        )
+    if summary["missing_captions"]:
+        raise ValueError(
+            "Dataset is missing caption sidecars: "
+            + ", ".join(summary["missing_captions"])
+        )
+    return chosen, summary
 
 
 def dataset_summary(dataset_path: str | Path) -> dict[str, Any]:
     """Return image/caption counts and validation warnings for UI display."""
 
     path = Path(dataset_path)
-    images = (
-        sorted(
-            p for p in path.iterdir() if p.suffix.lower() in ALLOWED_IMAGE_EXTENSIONS
-        )
-        if path.exists()
-        else []
-    )
-    captions = [
-        image.with_suffix(".txt")
-        for image in images
-        if image.with_suffix(".txt").exists()
-    ]
+    images = _image_files(path)
+    missing_captions: list[str] = []
+    invalid_captions: list[str] = []
+    valid_captions = 0
     warnings: list[str] = []
-    for caption_path in captions:
-        _sanitize_caption(caption_path.read_text())
-    if len(images) < 20:
+
+    for image in images:
+        caption_path = image.with_suffix(".txt")
+        if not caption_path.exists():
+            missing_captions.append(caption_path.name)
+            continue
+        try:
+            sanitize_physics_caption(caption_path.read_text())
+            valid_captions += 1
+        except ValueError as exc:
+            invalid_captions.append(f"{caption_path.name}: {exc}")
+
+    if len(images) < MIN_NEUTRAL_DATASET_IMAGES:
         warnings.append(
             "Dataset has fewer than 20 images; Phase 0.5 recommends 20-30 neutral references."
         )
-    if len(captions) != len(images):
+    if len(images) > MAX_NEUTRAL_DATASET_IMAGES:
+        warnings.append(
+            "Dataset has more than 30 images; consider curating a compact neutral physics set for faster 8 GB training."
+        )
+    if missing_captions:
         warnings.append(
             "Every image should have a same-name .txt caption before production training."
+        )
+    if invalid_captions:
+        warnings.append(
+            "One or more captions include identity/style/color details or lack physics keywords."
         )
     return {
         "path": str(path),
         "images": len(images),
-        "captions": len(captions),
+        "captions": valid_captions,
+        "missing_captions": missing_captions,
+        "invalid_captions": invalid_captions,
         "warnings": warnings,
     }
 
@@ -515,16 +700,10 @@ def train_general_physics_lora(
             "Collecting hardware-aware low-VRAM settings.",
             logs,
         )
-        prepared_dataset = (
-            Path(dataset_path)
-            if dataset_path
-            else ensure_bundled_general_physics_dataset()
+        prepared_dataset, summary = prepare_general_physics_dataset(
+            dataset_path=dataset_path,
+            use_bundled_dataset=dataset_path is None,
         )
-        if not prepared_dataset.exists():
-            raise FileNotFoundError(f"Dataset path does not exist: {prepared_dataset}")
-        summary = dataset_summary(prepared_dataset)
-        if summary["images"] == 0:
-            raise ValueError("Dataset must contain at least one supported image file.")
         _emit(
             progress_callback,
             0.18,
@@ -641,16 +820,23 @@ def gradio_train_general_physics_lora(
 ) -> tuple[str, str, str]:
     """Gradio adapter returning progress Markdown, logs, and artifact JSON."""
 
-    copied_uploads = _prepare_uploaded_dataset(uploaded_files)
-    chosen_dataset: str | None
-    if copied_uploads is not None:
-        chosen_dataset = str(copied_uploads)
-    elif use_bundled_dataset:
-        chosen_dataset = str(ensure_bundled_general_physics_dataset())
-    else:
-        chosen_dataset = dataset_path.strip() or None
-
     live_logs: list[str] = []
+
+    try:
+        chosen_dataset, _summary = prepare_general_physics_dataset(
+            dataset_path=dataset_path.strip() or None,
+            uploaded_files=uploaded_files,
+            use_bundled_dataset=use_bundled_dataset,
+        )
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - return dataset errors inside the Gradio panel.
+        error_result = {"ok": False, "status": "error", "error": str(exc)}
+        return (
+            f"## ❌ Dataset preparation failed\n{exc}",
+            str(exc),
+            json.dumps(error_result, indent=2),
+        )
 
     def callback(fraction: float, message: str) -> None:
         live_logs.append(message)
@@ -661,7 +847,7 @@ def gradio_train_general_physics_lora(
                 progress(fraction)
 
     result = train_general_physics_lora(
-        dataset_path=chosen_dataset,
+        dataset_path=str(chosen_dataset),
         output_dir=output_dir or str(DEFAULT_OUTPUT_DIR),
         rank=rank,
         epochs=epochs,

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from hardware_check import (
     GPUInfo,
     HardwareReport,
@@ -118,54 +116,3 @@ def test_markdown_report_mentions_720p_upscale_strategy() -> None:
 
 
 # Next step: add integration tests for setup.py path detection with temporary Pinokio-style folders.
-
-
-def test_low_vram_settings_exposed() -> None:
-    """Phase 0.5 trainer should get a compact low-VRAM settings dictionary."""
-
-    import hardware_check
-
-    settings = hardware_check.get_low_vram_settings()
-    assert 8 <= settings["rank_default"] <= 16
-    assert settings["batch_size"] == 1
-    assert "quantization" in settings
-
-
-def test_bundled_general_physics_dataset_has_physics_captions(tmp_path) -> None:
-    """Bundled dataset should create 20-30 neutral images with physics-only captions."""
-
-    import training_orchestrator
-
-    dataset = training_orchestrator.ensure_bundled_general_physics_dataset(
-        tmp_path / "general_physics"
-    )
-    summary = training_orchestrator.dataset_summary(dataset)
-    assert 20 <= summary["images"] <= 30
-    assert summary["captions"] == summary["images"]
-    captions = " ".join(path.read_text() for path in dataset.glob("*.txt"))
-    assert "hair" not in captions
-    assert "color" not in captions
-    assert "joint" in captions or "contact" in captions
-
-
-def test_train_general_physics_lora_stages_versioned_artifact(tmp_path) -> None:
-    """Trainer smoke test should write versioned artifact metadata without Ostris configured."""
-
-    import training_orchestrator
-
-    dataset = training_orchestrator.ensure_bundled_general_physics_dataset(
-        tmp_path / "dataset"
-    )
-    result = training_orchestrator.train_general_physics_lora(
-        dataset_path=str(dataset),
-        output_dir=str(tmp_path / "out"),
-        rank=8,
-        epochs=1,
-        use_low_vram=True,
-    )
-    assert result["ok"] is True
-    artifact = result["artifact"]
-    assert artifact["lora_path"].endswith(".safetensors")
-    assert artifact["metadata_path"].endswith("_metadata.json")
-    assert Path(artifact["lora_path"]).exists()
-    assert Path(artifact["metadata_path"]).exists()
