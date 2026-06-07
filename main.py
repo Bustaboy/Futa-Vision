@@ -18,7 +18,8 @@ from typing import Any
 import gradio as gr
 from dotenv import load_dotenv
 
-from hardware_check import collect_hardware_report, report_to_markdown
+import hardware_check
+from hardware_check import report_to_markdown
 from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, weighted_score
 
 APP_TITLE = "Futa-Vision Director"
@@ -100,7 +101,7 @@ def setup_status() -> str:
 
     paths = load_paths()
     ensure_storage(paths)
-    hardware = collect_hardware_report(paths.cache_dir)
+    hardware = hardware_check.collect_hardware_report(paths.cache_dir)
 
     lines = [
         f"# {APP_TITLE} Setup",
@@ -250,14 +251,34 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 0 runnable skeleton for the local-first long-form AI video director workflow. "
-            "Use only lawful, consensual adult content and keep generations local unless you explicitly choose cloud offload."
+            "Phase 0 runnable skeleton for the local-first long-form AI video director workflow."
+        )
+        gr.Markdown(
+            "## NSFW / Adult Confirmation\n"
+            "This is an adult creative tool. Confirm you are an adult and will only create lawful, "
+            "consensual adult content. Generations stay local by default; cloud uploads require explicit opt-in."
+        )
+        adult_confirmed = gr.Checkbox(
+            label="I confirm I am an adult and will only create lawful, consensual adult content.",
+            value=False,
         )
 
         with gr.Tab("Setup"):
+            gr.Markdown(
+                "The hardware panel below is populated by `hardware_check.collect_hardware_report()` "
+                "and rendered with the Markdown hardware report."
+            )
+            confirmation_status = gr.Markdown("Adult confirmation is required before generation workflows are enabled.")
             setup_output = gr.Markdown()
             refresh_setup = gr.Button("Run dependency and hardware check", variant="primary")
             refresh_setup.click(setup_status, outputs=setup_output)
+            adult_confirmed.change(
+                lambda confirmed: "Adult confirmation recorded for this local session."
+                if confirmed
+                else "Adult confirmation is required before generation workflows are enabled.",
+                inputs=adult_confirmed,
+                outputs=confirmation_status,
+            )
             demo.load(setup_status, outputs=setup_output)
 
         with gr.Tab("Library"):

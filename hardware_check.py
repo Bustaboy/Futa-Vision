@@ -147,10 +147,15 @@ def detect_gpu() -> tuple[GPUInfo, bool]:
 
 
 def build_recommendations(gpu: GPUInfo, cache_free_gb: float) -> tuple[str, list[str], list[str]]:
-    """Create mode recommendation and actionable warnings for Setup UI."""
+    """Create mode recommendation and actionable warnings for Setup UI.
+
+    CUDA-capable 8 GB cards must remain in local low-VRAM mode instead of
+    being treated as cloud-only; cloud is only the default when CUDA is absent
+    or when the user explicitly offloads a heavy job.
+    """
 
     recommendations = [
-        "Default to 1280x720 generation and upscale only after timeline assembly.",
+        "Default to 1280x720 (720p) generation, assemble locally, then upscale after the timeline is approved.",
         "Keep batch size at 1 for starter images, clips, and low-rank LoRA training.",
         "Enable disk caching and FP8/GGUF workflows where supported by ComfyUI nodes.",
         "Use LTX-2.3 for fast local previews and Wan 2.7 for final physics-heavy clips.",
@@ -161,7 +166,13 @@ def build_recommendations(gpu: GPUInfo, cache_free_gb: float) -> tuple[str, list
         warnings.append("CUDA GPU not available; use CPU-only diagnostics or RunPod cloud offload.")
         return "cloud_recommended", recommendations, warnings
 
-    if gpu.total_vram_gb is not None and gpu.total_vram_gb <= LOW_VRAM_THRESHOLD_GB:
+    if gpu.total_vram_gb is None:
+        recommendations.append(
+            "CUDA is available but VRAM size is unknown; use local low-VRAM defaults until detection improves."
+        )
+        recommendations.append("Offload training, extension, or final upscale to RunPod if OOM occurs.")
+        mode = "local_low_vram"
+    elif gpu.total_vram_gb <= LOW_VRAM_THRESHOLD_GB:
         recommendations.append(
             "Detected 10 GB VRAM or less; RTX 4070-style low-VRAM mode is recommended."
         )
@@ -208,6 +219,8 @@ def report_to_markdown(report: HardwareReport) -> str:
     gpu = report.gpu
     lines = [
         "## Hardware Check",
+        "**Default strategy:** generate clips at 1280x720 (720p), assemble the timeline, then upscale the approved final video.",
+        "",
         f"- **GPU:** {gpu.name}",
         f"- **CUDA available:** {gpu.cuda_available}",
         f"- **VRAM total:** {gpu.total_vram_gb if gpu.total_vram_gb is not None else 'unknown'} GiB",
