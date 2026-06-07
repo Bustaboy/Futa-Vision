@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from hardware_check import GPUInfo, HardwareReport, build_recommendations, report_to_markdown
+from pathlib import Path
+
+from hardware_check import (
+    GPUInfo,
+    HardwareReport,
+    build_recommendations,
+    report_to_markdown,
+)
 from scoring import rolling_average, weighted_score
 
 
@@ -30,7 +37,9 @@ def test_low_vram_recommendation() -> None:
         free_vram_gb=8.0,
         source="test",
     )
-    mode, recommendations, warnings, mode_reason = build_recommendations(gpu, cache_free_gb=100.0)
+    mode, recommendations, warnings, mode_reason = build_recommendations(
+        gpu, cache_free_gb=100.0
+    )
     assert mode == "local_low_vram"
     assert "low-VRAM threshold" in mode_reason
     assert any("local_low_vram" in item for item in recommendations)
@@ -49,7 +58,9 @@ def test_cuda_unknown_vram_uses_local_low_vram() -> None:
         free_vram_gb=None,
         source="test",
     )
-    mode, recommendations, warnings, _mode_reason = build_recommendations(gpu, cache_free_gb=100.0)
+    mode, recommendations, warnings, _mode_reason = build_recommendations(
+        gpu, cache_free_gb=100.0
+    )
     assert mode == "local_low_vram"
     assert any("VRAM size is unknown" in item for item in recommendations)
     assert warnings == []
@@ -66,7 +77,9 @@ def test_cache_below_100_gb_warns() -> None:
         free_vram_gb=8.0,
         source="test",
     )
-    _mode, _recommendations, warnings, _mode_reason = build_recommendations(gpu, cache_free_gb=99.0)
+    _mode, _recommendations, warnings, _mode_reason = build_recommendations(
+        gpu, cache_free_gb=99.0
+    )
     assert any("at least 100 GB" in warning for warning in warnings)
 
 
@@ -92,7 +105,9 @@ def test_markdown_report_mentions_720p_upscale_strategy() -> None:
         default_upscalers=["SeedVR 2.5", "RTX Video SR", "Nomos2"],
         low_vram_threshold_gb=10.0,
         minimum_recommended_cache_gb=100.0,
-        recommendations=["Default strategy: 720p generation + final upscale using SeedVR 2.5 / RTX Video SR / Nomos2."],
+        recommendations=[
+            "Default strategy: 720p generation + final upscale using SeedVR 2.5 / RTX Video SR / Nomos2."
+        ],
         warnings=[],
     )
     markdown = report_to_markdown(report)
@@ -101,4 +116,56 @@ def test_markdown_report_mentions_720p_upscale_strategy() -> None:
     assert "RTX Video SR" in markdown
     assert "Nomos2" in markdown
 
+
 # Next step: add integration tests for setup.py path detection with temporary Pinokio-style folders.
+
+
+def test_low_vram_settings_exposed() -> None:
+    """Phase 0.5 trainer should get a compact low-VRAM settings dictionary."""
+
+    import hardware_check
+
+    settings = hardware_check.get_low_vram_settings()
+    assert 8 <= settings["rank_default"] <= 16
+    assert settings["batch_size"] == 1
+    assert "quantization" in settings
+
+
+def test_bundled_general_physics_dataset_has_physics_captions(tmp_path) -> None:
+    """Bundled dataset should create 20-30 neutral images with physics-only captions."""
+
+    import training_orchestrator
+
+    dataset = training_orchestrator.ensure_bundled_general_physics_dataset(
+        tmp_path / "general_physics"
+    )
+    summary = training_orchestrator.dataset_summary(dataset)
+    assert 20 <= summary["images"] <= 30
+    assert summary["captions"] == summary["images"]
+    captions = " ".join(path.read_text() for path in dataset.glob("*.txt"))
+    assert "hair" not in captions
+    assert "color" not in captions
+    assert "joint" in captions or "contact" in captions
+
+
+def test_train_general_physics_lora_stages_versioned_artifact(tmp_path) -> None:
+    """Trainer smoke test should write versioned artifact metadata without Ostris configured."""
+
+    import training_orchestrator
+
+    dataset = training_orchestrator.ensure_bundled_general_physics_dataset(
+        tmp_path / "dataset"
+    )
+    result = training_orchestrator.train_general_physics_lora(
+        dataset_path=str(dataset),
+        output_dir=str(tmp_path / "out"),
+        rank=8,
+        epochs=1,
+        use_low_vram=True,
+    )
+    assert result["ok"] is True
+    artifact = result["artifact"]
+    assert artifact["lora_path"].endswith(".safetensors")
+    assert artifact["metadata_path"].endswith("_metadata.json")
+    assert Path(artifact["lora_path"]).exists()
+    assert Path(artifact["metadata_path"]).exists()

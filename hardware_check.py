@@ -19,7 +19,9 @@ BYTES_PER_GIB = 1024**3
 LOW_VRAM_THRESHOLD_GB = 10.0
 TARGET_LOCAL_VRAM_GB = 8.0
 MIN_RECOMMENDED_CACHE_GB = 100.0
-DEFAULT_STRATEGY = "720p generation + final upscale using SeedVR 2.5 / RTX Video SR / Nomos2"
+DEFAULT_STRATEGY = (
+    "720p generation + final upscale using SeedVR 2.5 / RTX Video SR / Nomos2"
+)
 DEFAULT_RESOLUTION = "1280x720 (720p)"
 DEFAULT_UPSCALERS = ["SeedVR 2.5", "RTX Video SR", "Nomos2"]
 
@@ -156,7 +158,9 @@ def detect_gpu() -> tuple[GPUInfo, bool]:
     )
 
 
-def build_recommendations(gpu: GPUInfo, cache_free_gb: float) -> tuple[str, list[str], list[str], str]:
+def build_recommendations(
+    gpu: GPUInfo, cache_free_gb: float
+) -> tuple[str, list[str], list[str], str]:
     """Create mode recommendation and actionable warnings for Setup UI.
 
     CUDA-capable cards with 10 GB VRAM or less explicitly use
@@ -174,14 +178,18 @@ def build_recommendations(gpu: GPUInfo, cache_free_gb: float) -> tuple[str, list
     warnings: list[str] = []
 
     if not gpu.cuda_available:
-        warnings.append("CUDA GPU not available; use CPU-only diagnostics or RunPod cloud offload.")
+        warnings.append(
+            "CUDA GPU not available; use CPU-only diagnostics or RunPod cloud offload."
+        )
         mode_reason = "No CUDA-capable NVIDIA GPU was detected."
         mode = "cloud_recommended"
     elif gpu.total_vram_gb is None:
         recommendations.append(
             "CUDA is available but VRAM size is unknown; use local_low_vram defaults until detection improves."
         )
-        recommendations.append("Offload training, extension, or final upscale to RunPod if OOM occurs.")
+        recommendations.append(
+            "Offload training, extension, or final upscale to RunPod if OOM occurs."
+        )
         mode_reason = "CUDA is available, but VRAM could not be measured safely."
         mode = "local_low_vram"
     elif gpu.total_vram_gb <= LOW_VRAM_THRESHOLD_GB:
@@ -194,11 +202,17 @@ def build_recommendations(gpu: GPUInfo, cache_free_gb: float) -> tuple[str, list
         recommendations.append(
             "Offload training, extension, or final upscale to RunPod only if OOM or turnaround time becomes unacceptable."
         )
-        mode_reason = f"VRAM is at or below the {LOW_VRAM_THRESHOLD_GB:g} GiB low-VRAM threshold."
+        mode_reason = (
+            f"VRAM is at or below the {LOW_VRAM_THRESHOLD_GB:g} GiB low-VRAM threshold."
+        )
         mode = "local_low_vram"
     else:
-        recommendations.append("VRAM is above the low-VRAM threshold; local balanced/high-quality jobs may be practical.")
-        mode_reason = f"VRAM is above the {LOW_VRAM_THRESHOLD_GB:g} GiB low-VRAM threshold."
+        recommendations.append(
+            "VRAM is above the low-VRAM threshold; local balanced/high-quality jobs may be practical."
+        )
+        mode_reason = (
+            f"VRAM is above the {LOW_VRAM_THRESHOLD_GB:g} GiB low-VRAM threshold."
+        )
         mode = "local_balanced"
 
     if cache_free_gb < MIN_RECOMMENDED_CACHE_GB:
@@ -208,7 +222,9 @@ def build_recommendations(gpu: GPUInfo, cache_free_gb: float) -> tuple[str, list
         )
 
     if gpu.total_vram_gb is not None and gpu.total_vram_gb < TARGET_LOCAL_VRAM_GB:
-        warnings.append("Detected VRAM below 8 GB; use reduced previews or RunPod for generation.")
+        warnings.append(
+            "Detected VRAM below 8 GB; use reduced previews or RunPod for generation."
+        )
 
     return mode, recommendations, warnings, mode_reason
 
@@ -222,7 +238,9 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
     cache_free_gb = round(disk_usage.free / BYTES_PER_GIB, 2)
 
     gpu, torch_imported = detect_gpu()
-    mode, recommendations, warnings, mode_reason = build_recommendations(gpu, cache_free_gb)
+    mode, recommendations, warnings, mode_reason = build_recommendations(
+        gpu, cache_free_gb
+    )
 
     return HardwareReport(
         gpu=gpu,
@@ -239,6 +257,52 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
         recommendations=recommendations,
         warnings=warnings,
     )
+
+
+def get_low_vram_settings() -> dict[str, Any]:
+    """Return hardware-aware defaults for 8 GB focused training/generation jobs.
+
+    Phase 0.5 uses this compact settings dictionary to pre-fill Gradio
+    training controls and to configure Ostris jobs for RTX 4070-class cards.
+    The values are intentionally conservative: batch size 1, low rank,
+    gradient checkpointing, disk cache, quantized model loading, and local
+    720p preview/generation defaults with RunPod as an explicit fallback.
+    """
+
+    report = collect_hardware_report()
+    low_vram = report.recommended_mode in {"local_low_vram", "cloud_recommended"}
+    total_vram = report.gpu.total_vram_gb
+    if total_vram is not None and total_vram <= LOW_VRAM_THRESHOLD_GB:
+        low_vram = True
+
+    rank_default = 8 if low_vram else 16
+    return {
+        "mode": report.recommended_mode,
+        "use_low_vram": low_vram,
+        "rank_default": rank_default,
+        "rank_min": 8,
+        "rank_max": 16,
+        "epochs_default": 10,
+        "learning_rate_default": 1e-4 if low_vram else 1.5e-4,
+        "batch_size": 1,
+        "gradient_accumulation_steps": 4 if low_vram else 2,
+        "gradient_checkpointing": True,
+        "mixed_precision": "fp8" if low_vram else "bf16",
+        "quantization": "fp8/int8" if low_vram else "bf16/fp16",
+        "optimizer": "adamw8bit",
+        "cache_latents": True,
+        "resolution": DEFAULT_RESOLUTION,
+        "device": "cuda" if report.gpu.cuda_available else "cpu_or_runpod",
+        "runpod_recommended": report.recommended_mode == "cloud_recommended",
+        "estimated_minutes_per_epoch": 6 if low_vram else 3,
+        "hardware_summary": {
+            "gpu": report.gpu.name,
+            "total_vram_gb": total_vram,
+            "free_vram_gb": report.gpu.free_vram_gb,
+            "cache_free_gb": report.cache_free_gb,
+        },
+        "warnings": report.warnings,
+    }
 
 
 def report_to_markdown(report: HardwareReport) -> str:

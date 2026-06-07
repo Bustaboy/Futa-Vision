@@ -20,6 +20,7 @@ import gradio as gr
 from dotenv import load_dotenv
 
 import hardware_check
+import training_orchestrator
 from hardware_check import report_to_markdown
 from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, weighted_score
 
@@ -86,10 +87,19 @@ def adult_confirmation_status(confirmed: bool) -> str:
 
 
 def gate_update(confirmed: bool) -> list[Any]:
-    """Enable or disable generation/edit controls based on the adult confirmation gate."""
+    """Enable or disable gated app sections based on the adult confirmation gate."""
 
-    interactive = confirmed or not adult_confirmation_required()
-    return [adult_confirmation_status(confirmed), *[gr.update(interactive=interactive) for _ in range(3)]]
+    unlocked = confirmed or not adult_confirmation_required()
+    return [
+        adult_confirmation_status(confirmed),
+        gr.update(visible=not unlocked),
+        gr.update(visible=unlocked),
+        gr.update(visible=unlocked),
+        gr.update(visible=unlocked),
+        gr.update(visible=unlocked),
+        gr.update(visible=unlocked),
+        *[gr.update(interactive=unlocked) for _ in range(4)],
+    ]
 
 
 def load_paths() -> AppPaths:
@@ -103,8 +113,12 @@ def load_paths() -> AppPaths:
         workflows_dir=Path(os.getenv("FUTA_VISION_WORKFLOWS_DIR", "workflows")),
         cache_dir=Path(os.getenv("FUTA_VISION_CACHE_DIR", "cache")),
         logs_dir=Path(os.getenv("FUTA_VISION_LOGS_DIR", "logs")),
-        ostris_path=Path(os.environ["OSTRIS_PATH"]) if os.getenv("OSTRIS_PATH") else None,
-        comfyui_path=Path(os.environ["COMFYUI_PATH"]) if os.getenv("COMFYUI_PATH") else None,
+        ostris_path=(
+            Path(os.environ["OSTRIS_PATH"]) if os.getenv("OSTRIS_PATH") else None
+        ),
+        comfyui_path=(
+            Path(os.environ["COMFYUI_PATH"]) if os.getenv("COMFYUI_PATH") else None
+        ),
     )
 
 
@@ -116,6 +130,7 @@ def ensure_storage(paths: AppPaths) -> None:
         paths.library_dir / "partners",
         paths.library_dir / "indexes",
         Path("general_physics_lora"),
+        paths.datasets_dir / "general_physics",
         paths.datasets_dir / "male",
         paths.datasets_dir / "partners",
         paths.outputs_dir / "images",
@@ -157,10 +172,10 @@ def setup_status() -> str:
         f"- Outputs: `{paths.outputs_dir}`",
         "",
         "## Actionable Phase TODOs",
-        "- Phase 0: add ComfyUI extension checks for IPAdapter, AnimateDiff, Wan extender, LTX, Regional ControlNets, and LayerDiffuse.",
-        "- Phase 0: add a RunPod preflight that lists exactly which prompts, references, LoRAs, workflows, and metadata would be uploaded.",
-        "- Phase 0.5: implement General Physics/Anatomy Base LoRA import/training, identity-neutral captions, validation samples, and saved validation scores.",
-        "- Phase 1: replace placeholder library JSON with SQLite/JSON CRUD, searchable thumbnails, weighted scoring grid persistence, and Ostris partner training jobs.",
+        "- Phase 0: merged baseline Gradio shell, scoring math, setup detection, and hardware reporting.",
+        "- TODO Phase 0.5: validate Ostris-produced checkpoints, add sample-image validation, and archive validation scores next to metadata.",
+        "- TODO Phase 1: replace placeholder library JSON with SQLite/JSON CRUD, searchable thumbnails, weighted scoring grid persistence, and Ostris partner training jobs.",
+        "- TODO Phase 2: add ComfyUI extension checks for IPAdapter, AnimateDiff, Wan extender, LTX, Regional ControlNets, and LayerDiffuse plus RunPod preflight manifests.",
     ]
     return "\n".join(lines)
 
@@ -183,6 +198,20 @@ def sample_library() -> list[dict[str, Any]]:
             created_at=created_at,
             tags=["locked", "pov", "requires-setup"],
             notes="Must be versioned and protected from accidental overwrite.",
+        ),
+        CharacterRecord(
+            id="general_physics_v1",
+            display_name="General Physics/Anatomy Base LoRA",
+            type="base_physics_lora",
+            lora_path="general_physics_lora/general_physics_v1.0.safetensors",
+            thumbnail_path="datasets/general_physics/physics_reference_01.png",
+            base_prompt="Physics-only prior for anatomy, contact, deformation, weight transfer, and motion plausibility.",
+            negative_prompt="Identity details, colors, hair, clothing, character traits, style drift.",
+            score_average=0.0,
+            training_profile="general_physics_low_rank_v1",
+            created_at=created_at,
+            tags=["physics", "anatomy", "base-lora", "phase-0.5"],
+            notes="Train from the Phase 0.5 tab before partner generation.",
         ),
         CharacterRecord(
             id="partner_template_0001",
@@ -225,13 +254,19 @@ def score_partner_batch(
 
     prior_scores: list[float] = []
     if prior_scores_text.strip():
-        prior_scores = [float(item.strip()) for item in prior_scores_text.split(",") if item.strip()]
+        prior_scores = [
+            float(item.strip()) for item in prior_scores_text.split(",") if item.strip()
+        ]
 
     score = weighted_score(anatomy, physics, style)
     scores = [*prior_scores, score]
     rolling = rolling_average(scores)
     approved = is_approved(scores)
-    status = "APPROVED for Ostris partner LoRA training" if approved else "KEEP GENERATING/SCORING"
+    status = (
+        "APPROVED for Ostris partner LoRA training"
+        if approved
+        else "KEEP GENERATING/SCORING"
+    )
 
     markdown = (
         f"## Partner Score\n"
@@ -287,6 +322,72 @@ def timeline_placeholder(chat_message: str, timeline_notes: str) -> tuple[str, s
     return response, updated_notes
 
 
+def training_defaults() -> dict[str, Any]:
+    """Return hardware-aware Phase 0.5 defaults for the Gradio training tab."""
+
+    return hardware_check.get_low_vram_settings()
+
+
+def training_defaults_markdown() -> str:
+    """Render low-VRAM LoRA defaults for Setup and training visibility."""
+
+    defaults = training_defaults()
+    return (
+        "## Phase 0.5 Low-VRAM Training Defaults\n"
+        f"- Mode: `{defaults['mode']}`\n"
+        f"- Rank: `{defaults['rank_default']}` (allowed {defaults['rank_min']}-{defaults['rank_max']})\n"
+        f"- Epochs: `{defaults['epochs_default']}`\n"
+        f"- Learning rate: `{defaults['learning_rate_default']}`\n"
+        f"- Batch size: `{defaults['batch_size']}`\n"
+        f"- Precision/quantization: `{defaults['mixed_precision']}` / `{defaults['quantization']}`\n"
+        f"- Cache latents: `{defaults['cache_latents']}`\n"
+        "- TODO Phase 0.5: replace placeholder checkpoint staging with verified Ostris safetensors discovery.\n"
+        "- TODO Phase 1: automatically register the approved General Physics LoRA in the character library."
+    )
+
+
+def ensure_general_physics_dataset_status() -> str:
+    """Create the bundled neutral dataset if needed and return a status summary."""
+
+    dataset = training_orchestrator.ensure_bundled_general_physics_dataset()
+    summary = training_orchestrator.dataset_summary(dataset)
+    warnings = "\n".join(f"- {warning}" for warning in summary["warnings"]) or "- None"
+    return (
+        "## Bundled Neutral Dataset\n"
+        f"- Path: `{summary['path']}`\n"
+        f"- Images: `{summary['images']}`\n"
+        f"- Captions: `{summary['captions']}`\n"
+        "- Caption policy: physics/anatomy only; no identity, color, hair, clothing, or style traits.\n"
+        f"### Warnings\n{warnings}"
+    )
+
+
+def start_general_physics_training(
+    use_bundled_dataset: bool,
+    uploaded_files: list[str] | None,
+    dataset_path: str,
+    output_dir: str,
+    rank: int,
+    epochs: int,
+    learning_rate: float,
+    use_low_vram: bool,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[str, str, str]:
+    """Run the Phase 0.5 trainer and stream progress/log output to Gradio."""
+
+    return training_orchestrator.gradio_train_general_physics_lora(
+        use_bundled_dataset=use_bundled_dataset,
+        uploaded_files=uploaded_files,
+        dataset_path=dataset_path,
+        output_dir=output_dir,
+        rank=rank,
+        epochs=epochs,
+        learning_rate=learning_rate,
+        use_low_vram=use_low_vram,
+        progress=progress,
+    )
+
+
 def phase0_test_markdown() -> str:
     """Return README-equivalent quick test instructions inside the app."""
 
@@ -311,11 +412,11 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 0 runnable skeleton for the local-first long-form AI video director workflow."
+            "Phase 0 merged. Now implementing Phase 0.5: General Physics/Anatomy Base LoRA trainer."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
-            "This application is an adult creative tool. You must be an adult and agree to create only lawful, "
+            f"Gate controlled by `{ADULT_CONFIRMATION_ENV}`. You must be an adult and agree to create only lawful, "
             "consensual adult content. Generations stay local by default; every cloud upload must be explicitly approved."
         )
         adult_confirmed = gr.Checkbox(
@@ -323,11 +424,19 @@ def build_ui() -> gr.Blocks:
             value=initial_confirmed,
             interactive=require_adult_confirmation,
         )
+        adult_gate_banner = gr.Markdown(
+            "## 🔒 Adult confirmation required\nConfirm the checkbox above to unlock Library, training, generation, and timeline tabs for this local session.",
+            visible=not initial_interactive,
+        )
 
         with gr.Tab("Setup"):
-            confirmation_status = gr.Markdown(adult_confirmation_status(initial_confirmed))
+            confirmation_status = gr.Markdown(
+                adult_confirmation_status(initial_confirmed)
+            )
             setup_output = gr.Markdown()
-            refresh_setup = gr.Button("Refresh setup paths and TODOs", variant="secondary")
+            refresh_setup = gr.Button(
+                "Refresh setup paths and TODOs", variant="secondary"
+            )
             refresh_setup.click(setup_status, outputs=setup_output)
             demo.load(setup_status, outputs=setup_output)
 
@@ -339,83 +448,211 @@ def build_ui() -> gr.Blocks:
             refresh_hardware = gr.Button("Refresh Hardware Status", variant="primary")
             refresh_hardware.click(hardware_status_markdown, outputs=hardware_output)
             demo.load(hardware_status_markdown, outputs=hardware_output)
+            training_defaults_output = gr.Markdown()
+            refresh_training_defaults = gr.Button(
+                "Refresh Phase 0.5 training defaults", variant="secondary"
+            )
+            refresh_training_defaults.click(
+                training_defaults_markdown, outputs=training_defaults_output
+            )
+            demo.load(training_defaults_markdown, outputs=training_defaults_output)
             gr.Markdown(phase0_test_markdown())
 
+        with gr.Tab("Train General Physics LoRA"):
+            with gr.Group(visible=initial_interactive) as training_group:
+                gr.Markdown(
+                    "Train the Phase 0.5 identity-neutral General Physics/Anatomy Base LoRA using Ostris AI Toolkit. "
+                    "Captions are strictly physics-focused: contact, pressure, deformation, balance, joint alignment, and motion arcs only. "
+                    "TODO Phase 0.5: add validation sample generation and score persistence after real checkpoint discovery is verified."
+                )
+                dataset_status = gr.Markdown()
+                refresh_dataset = gr.Button(
+                    "Create/Refresh bundled neutral dataset", variant="secondary"
+                )
+                refresh_dataset.click(
+                    ensure_general_physics_dataset_status, outputs=dataset_status
+                )
+                demo.load(ensure_general_physics_dataset_status, outputs=dataset_status)
+                use_bundled_dataset = gr.Checkbox(
+                    label="Use bundled neutral physics dataset", value=True
+                )
+                uploaded_dataset = gr.Files(
+                    label="Optional user dataset images",
+                    file_types=["image"],
+                    type="filepath",
+                )
+                dataset_path = gr.Textbox(
+                    label="Dataset path if not using bundled/upload",
+                    value="datasets/general_physics",
+                )
+                output_dir = gr.Textbox(
+                    label="Output directory", value="general_physics_lora"
+                )
+                defaults = training_defaults()
+                with gr.Row():
+                    train_rank = gr.Slider(
+                        8, 16, value=defaults["rank_default"], step=1, label="LoRA rank"
+                    )
+                    train_epochs = gr.Slider(
+                        1, 50, value=defaults["epochs_default"], step=1, label="Epochs"
+                    )
+                    train_lr = gr.Number(
+                        value=defaults["learning_rate_default"],
+                        label="Learning rate",
+                        precision=6,
+                    )
+                use_low_vram = gr.Checkbox(
+                    label="Use low-VRAM FP8/INT8 optimized settings",
+                    value=defaults["use_low_vram"],
+                )
+                start_training = gr.Button(
+                    "Start Training", variant="primary", interactive=initial_interactive
+                )
+                training_status = gr.Markdown()
+                training_logs = gr.Textbox(label="Live logs", lines=14)
+                training_artifact = gr.Code(label="Artifact JSON", language="json")
+                start_training.click(
+                    start_general_physics_training,
+                    inputs=[
+                        use_bundled_dataset,
+                        uploaded_dataset,
+                        dataset_path,
+                        output_dir,
+                        train_rank,
+                        train_epochs,
+                        train_lr,
+                        use_low_vram,
+                    ],
+                    outputs=[training_status, training_logs, training_artifact],
+                )
+
         with gr.Tab("Library"):
-            gr.Markdown(
-                "Browse fixed male, General Physics/Anatomy Base LoRA, and partner records. "
-                "TODO Phase 1: replace placeholder JSON with SQLite-backed thumbnails, tags, favorites, and one-click LoRA loading."
-            )
-            library_search = gr.Textbox(label="Search by id, name, type, or tag")
-            library_output = gr.Code(label="Library records", language="json")
-            library_search.change(library_json, inputs=library_search, outputs=library_output)
-            demo.load(library_json, outputs=library_output)
+            with gr.Group(visible=initial_interactive) as library_group:
+                gr.Markdown(
+                    "Browse fixed male, General Physics/Anatomy Base LoRA, and partner records. "
+                    "TODO Phase 1: replace placeholder JSON with SQLite-backed thumbnails, tags, favorites, and one-click LoRA loading."
+                )
+                library_search = gr.Textbox(label="Search by id, name, type, or tag")
+                library_output = gr.Code(label="Library records", language="json")
+                library_search.change(
+                    library_json, inputs=library_search, outputs=library_output
+                )
+                demo.load(library_json, outputs=library_output)
 
         with gr.Tab("Create Partner"):
-            gr.Markdown(
-                "Generate 10–20 starter images, manually score Anatomy/Physics/Style, "
-                "and train a partner LoRA when the last-10 average reaches 80+. "
-                "TODO Phase 0.5: load the approved General Physics/Anatomy Base LoRA before partner image generation. "
-                "TODO Phase 1: persist score rows and launch Ostris training when approved."
-            )
-            partner_prompt = gr.Textbox(label="Partner prompt", lines=4)
-            base_image = gr.Image(label="Optional base image", type="filepath")
-            with gr.Row():
-                anatomy = gr.Slider(0, 100, value=80, step=1, label="Anatomy score (40%)")
-                physics = gr.Slider(0, 100, value=80, step=1, label="Physics score (40%)")
-                style = gr.Slider(0, 100, value=80, step=1, label="Style score (20%)")
-            prior_scores = gr.Textbox(label="Prior weighted scores (comma-separated)")
-            score_button = gr.Button("Score placeholder image", interactive=initial_interactive)
-            score_output = gr.Markdown()
-            generated_scores = gr.Textbox(label="Updated weighted scores")
-            score_button.click(
-                score_partner_batch,
-                inputs=[anatomy, physics, style, prior_scores],
-                outputs=[score_output, generated_scores],
-            )
+            with gr.Group(visible=initial_interactive) as partner_group:
+                gr.Markdown(
+                    "Generate 10–20 starter images, manually score Anatomy/Physics/Style, "
+                    "and train a partner LoRA when the last-10 average reaches 80+. "
+                    "TODO Phase 0.5: load the approved General Physics/Anatomy Base LoRA before partner image generation. "
+                    "TODO Phase 1: persist score rows and launch Ostris training when approved."
+                )
+                partner_prompt = gr.Textbox(label="Partner prompt", lines=4)
+                base_image = gr.Image(label="Optional base image", type="filepath")
+                with gr.Row():
+                    anatomy = gr.Slider(
+                        0, 100, value=80, step=1, label="Anatomy score (40%)"
+                    )
+                    physics = gr.Slider(
+                        0, 100, value=80, step=1, label="Physics score (40%)"
+                    )
+                    style = gr.Slider(
+                        0, 100, value=80, step=1, label="Style score (20%)"
+                    )
+                prior_scores = gr.Textbox(
+                    label="Prior weighted scores (comma-separated)"
+                )
+                score_button = gr.Button(
+                    "Score placeholder image", interactive=initial_interactive
+                )
+                score_output = gr.Markdown()
+                generated_scores = gr.Textbox(label="Updated weighted scores")
+                score_button.click(
+                    score_partner_batch,
+                    inputs=[anatomy, physics, style, prior_scores],
+                    outputs=[score_output, generated_scores],
+                )
 
         with gr.Tab("Generate Video"):
-            gr.Markdown(
-                "Create short 5–10 second clips at 720p, auto-review, extend, and send accepted clips to the timeline. "
-                "TODO Phase 2: submit real ComfyUI Wan/LTX workflows, sample frames for auto-review, and quarantine clips below 80."
-            )
-            scene_prompt = gr.Textbox(label="Scene prompt", lines=5)
-            selected_partners = gr.Textbox(label="Selected partner LoRA IDs", placeholder="partner_0001, partner_0002")
-            pipeline = gr.Radio(
-                ["ltx-2.3-preview", "wan-2.7-physics"],
-                value="ltx-2.3-preview",
-                label="Pipeline",
-            )
-            duration = gr.Slider(5, 10, value=5, step=1, label="Clip duration seconds")
-            use_runpod = gr.Checkbox(label="Offload this job to RunPod", value=False)
-            generate_plan = gr.Button("Build dry-run generation plan", variant="primary", interactive=initial_interactive)
-            plan_output = gr.Markdown()
-            generate_plan.click(
-                build_generation_plan,
-                inputs=[scene_prompt, selected_partners, pipeline, duration, use_runpod],
-                outputs=plan_output,
-            )
+            with gr.Group(visible=initial_interactive) as generate_group:
+                gr.Markdown(
+                    "Create short 5–10 second clips at 720p, auto-review, extend, and send accepted clips to the timeline. "
+                    "TODO Phase 2: submit real ComfyUI Wan/LTX workflows, sample frames for auto-review, and quarantine clips below 80."
+                )
+                scene_prompt = gr.Textbox(label="Scene prompt", lines=5)
+                selected_partners = gr.Textbox(
+                    label="Selected partner LoRA IDs",
+                    placeholder="partner_0001, partner_0002",
+                )
+                pipeline = gr.Radio(
+                    ["ltx-2.3-preview", "wan-2.7-physics"],
+                    value="ltx-2.3-preview",
+                    label="Pipeline",
+                )
+                duration = gr.Slider(
+                    5, 10, value=5, step=1, label="Clip duration seconds"
+                )
+                use_runpod = gr.Checkbox(
+                    label="Offload this job to RunPod", value=False
+                )
+                generate_plan = gr.Button(
+                    "Build dry-run generation plan",
+                    variant="primary",
+                    interactive=initial_interactive,
+                )
+                plan_output = gr.Markdown()
+                generate_plan.click(
+                    build_generation_plan,
+                    inputs=[
+                        scene_prompt,
+                        selected_partners,
+                        pipeline,
+                        duration,
+                        use_runpod,
+                    ],
+                    outputs=plan_output,
+                )
 
         with gr.Tab("Timeline"):
-            gr.Markdown(
-                "Playable timeline placeholder with edit chat. "
-                "TODO Phase 2: add clip provenance, reorder/trim/replace metadata, and final upscale export. "
-                "TODO Phase 3: connect chat edits to targeted regeneration and timeline version history."
-            )
-            timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=10)
-            chat_message = gr.Textbox(label="Chat edit request", placeholder="Fix this transition or slow the whole scene down.")
-            chat_button = gr.Button("Create placeholder edit intent", interactive=initial_interactive)
-            chat_response = gr.Markdown()
-            chat_button.click(
-                timeline_placeholder,
-                inputs=[chat_message, timeline_notes],
-                outputs=[chat_response, timeline_notes],
-            )
+            with gr.Group(visible=initial_interactive) as timeline_group:
+                gr.Markdown(
+                    "Playable timeline placeholder with edit chat. "
+                    "TODO Phase 2: add clip provenance, reorder/trim/replace metadata, and final upscale export. "
+                    "TODO Phase 3: connect chat edits to targeted regeneration and timeline version history."
+                )
+                timeline_notes = gr.Textbox(
+                    label="Timeline notes / clip provenance", lines=10
+                )
+                chat_message = gr.Textbox(
+                    label="Chat edit request",
+                    placeholder="Fix this transition or slow the whole scene down.",
+                )
+                chat_button = gr.Button(
+                    "Create placeholder edit intent", interactive=initial_interactive
+                )
+                chat_response = gr.Markdown()
+                chat_button.click(
+                    timeline_placeholder,
+                    inputs=[chat_message, timeline_notes],
+                    outputs=[chat_response, timeline_notes],
+                )
 
         adult_confirmed.change(
             gate_update,
             inputs=adult_confirmed,
-            outputs=[confirmation_status, score_button, generate_plan, chat_button],
+            outputs=[
+                confirmation_status,
+                adult_gate_banner,
+                training_group,
+                library_group,
+                partner_group,
+                generate_group,
+                timeline_group,
+                start_training,
+                score_button,
+                generate_plan,
+                chat_button,
+            ],
         )
 
     return demo
@@ -433,5 +670,6 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# Next step: split placeholders into backend modules (`library_index.py`, `comfy_client.py`,
-# `training_orchestrator.py`, `video_assembly.py`, `chat_parser.py`, and `runpod_client.py`) with tests.
+# TODO Phase 0.5: add validation-sample scoring for the General Physics LoRA.
+# TODO Phase 1: split placeholders into `library_index.py`, `comfy_client.py`,
+# `video_assembly.py`, `chat_parser.py`, and `runpod_client.py` with tests.
