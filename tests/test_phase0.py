@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from hardware_check import GPUInfo, HardwareReport, build_recommendations, report_to_markdown
+from hardware_check import (
+    GPUInfo,
+    HardwareReport,
+    build_recommendations,
+    report_to_markdown,
+)
 from scoring import rolling_average, weighted_score
 
 
@@ -30,7 +35,9 @@ def test_low_vram_recommendation() -> None:
         free_vram_gb=8.0,
         source="test",
     )
-    mode, recommendations, warnings, mode_reason = build_recommendations(gpu, cache_free_gb=100.0)
+    mode, recommendations, warnings, mode_reason = build_recommendations(
+        gpu, cache_free_gb=100.0
+    )
     assert mode == "local_low_vram"
     assert "low-VRAM threshold" in mode_reason
     assert any("local_low_vram" in item for item in recommendations)
@@ -49,7 +56,9 @@ def test_cuda_unknown_vram_uses_local_low_vram() -> None:
         free_vram_gb=None,
         source="test",
     )
-    mode, recommendations, warnings, _mode_reason = build_recommendations(gpu, cache_free_gb=100.0)
+    mode, recommendations, warnings, _mode_reason = build_recommendations(
+        gpu, cache_free_gb=100.0
+    )
     assert mode == "local_low_vram"
     assert any("VRAM size is unknown" in item for item in recommendations)
     assert warnings == []
@@ -66,7 +75,9 @@ def test_cache_below_100_gb_warns() -> None:
         free_vram_gb=8.0,
         source="test",
     )
-    _mode, _recommendations, warnings, _mode_reason = build_recommendations(gpu, cache_free_gb=99.0)
+    _mode, _recommendations, warnings, _mode_reason = build_recommendations(
+        gpu, cache_free_gb=99.0
+    )
     assert any("at least 100 GB" in warning for warning in warnings)
 
 
@@ -92,7 +103,9 @@ def test_markdown_report_mentions_720p_upscale_strategy() -> None:
         default_upscalers=["SeedVR 2.5", "RTX Video SR", "Nomos2"],
         low_vram_threshold_gb=10.0,
         minimum_recommended_cache_gb=100.0,
-        recommendations=["Default strategy: 720p generation + final upscale using SeedVR 2.5 / RTX Video SR / Nomos2."],
+        recommendations=[
+            "Default strategy: 720p generation + final upscale using SeedVR 2.5 / RTX Video SR / Nomos2."
+        ],
         warnings=[],
     )
     markdown = report_to_markdown(report)
@@ -100,5 +113,6 @@ def test_markdown_report_mentions_720p_upscale_strategy() -> None:
     assert "SeedVR 2.5" in markdown
     assert "RTX Video SR" in markdown
     assert "Nomos2" in markdown
+
 
 # Next step: add integration tests for setup.py path detection with temporary Pinokio-style folders.
