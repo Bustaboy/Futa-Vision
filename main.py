@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 import chat_parser
 import hardware_check
 import library as character_library
+import regeneration_engine
 import timeline
 import training_orchestrator
 import video_assembly
@@ -370,6 +371,45 @@ async def parse_timeline_chat_edit(chat_message: str, timeline_state_json: str, 
     return response, updated_notes
 
 
+
+async def apply_timeline_regeneration_edit(
+    chat_message: str,
+    timeline_state_json: str,
+    timeline_notes: str,
+) -> tuple[str, str, list[list[Any]], str | None, str, str, str]:
+    """Parse and apply a Phase 3.3 targeted regeneration command from the Timeline tab."""
+
+    try:
+        timeline_state = json.loads(timeline_state_json) if timeline_state_json else {}
+    except json.JSONDecodeError:
+        timeline_state = {}
+    intent = await asyncio.to_thread(chat_parser.parse_chat_command, chat_message, timeline_state)
+    try:
+        updated_state = await asyncio.to_thread(regeneration_engine.apply_regeneration_command, timeline_state, intent)
+    except Exception as exc:  # noqa: BLE001 - keep Gradio responsive with actionable status.
+        preview = chat_parser.intent_to_markdown(intent)
+        status = f"## Phase 3.3 regeneration failed\n{exc}"
+        state = timeline._load_state(timeline_state)
+        state_json, html_view, rows, preview_video, timeline_status = timeline._ui_payload(state, status)
+        existing_notes = (timeline_notes or "").strip()
+        failed_event = {
+            "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+            "phase": "3.3_targeted_regeneration",
+            "status": "failed",
+            "intent": intent,
+            "error": str(exc),
+        }
+        updated_notes = (existing_notes + "\n" + json.dumps(failed_event, sort_keys=True)).strip()
+        return state_json, html_view, rows, preview_video, timeline_status, preview, updated_notes
+
+    state = timeline._load_state(updated_state)
+    status = regeneration_engine.regeneration_result_to_markdown(updated_state)
+    state_json, html_view, rows, preview_video, timeline_status = timeline._ui_payload(state, status)
+    existing_notes = (timeline_notes or "").strip()
+    updated_notes = (existing_notes + "\n" + json.dumps(updated_state.get("last_regeneration", {}), sort_keys=True)).strip()
+    response = chat_parser.intent_to_markdown(intent) + "\n\n" + status
+    return state_json, html_view, rows, preview_video, timeline_status, response, updated_notes
+
 def training_defaults() -> dict[str, Any]:
     """Return hardware-aware Phase 0.5 defaults for the Gradio training tab."""
 
@@ -627,9 +667,10 @@ def build_ui() -> gr.Blocks:
                 )
                 timeline_components = timeline.build_timeline_editor(initial_interactive=initial_interactive)
                 gr.Markdown(
-                    "## Phase 3.2 LLM Chat Parser\n"
-                    "Enter natural-language edit requests to preview a structured intent. Ollama is tried first for local parsing, "
-                    "OpenRouter is supported when configured, and deterministic rules keep the UI useful if no LLM is available."
+                    "## Phase 3.2 + 3.3 Chat Regeneration\n"
+                    "Enter natural-language edit requests to preview a structured intent, then apply Phase 3.3 targeted regeneration. "
+                    "Ollama is tried first for local parsing, OpenRouter is supported when configured, and deterministic rules keep the UI useful if no LLM is available. "
+                    "Targeted regeneration preserves untouched timeline clips, reuses Phase 2 JSON sidecars, and runs the 720p → final-upscale placeholder workflow."
                 )
                 timeline_notes = gr.Textbox(label="Structured edit intents / clip provenance", lines=6)
                 chat_message = gr.Textbox(
@@ -637,12 +678,27 @@ def build_ui() -> gr.Blocks:
                     placeholder="fix sudden position change between clip 3 and 4",
                     lines=2,
                 )
-                chat_button = gr.Button("Send Edit Request", interactive=initial_interactive, variant="primary")
-                chat_response = gr.Markdown(label="Parsed intent preview")
+                with gr.Row():
+                    chat_button = gr.Button("Preview Edit Intent", interactive=initial_interactive, variant="secondary")
+                    regeneration_button = gr.Button("Apply Targeted Regeneration", interactive=initial_interactive, variant="primary")
+                chat_response = gr.Markdown(label="Parsed intent / regeneration status")
                 chat_button.click(
                     parse_timeline_chat_edit,
                     inputs=[chat_message, timeline_components["state_json"], timeline_notes],
                     outputs=[chat_response, timeline_notes],
+                )
+                regeneration_button.click(
+                    apply_timeline_regeneration_edit,
+                    inputs=[chat_message, timeline_components["state_json"], timeline_notes],
+                    outputs=[
+                        timeline_components["state_json"],
+                        timeline_components["timeline_html"],
+                        timeline_components["clip_table"],
+                        timeline_components["preview_video"],
+                        timeline_components["status"],
+                        chat_response,
+                        timeline_notes,
+                    ],
                 )
 
         def _gate_update(confirmed: bool) -> list[Any]:
@@ -664,6 +720,7 @@ def build_ui() -> gr.Blocks:
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 *[gr.update(interactive=unlocked) for _ in timeline_components["gated_controls"]],
+                gr.update(interactive=unlocked),
             ]
 
         adult_confirmed.change(
@@ -686,6 +743,7 @@ def build_ui() -> gr.Blocks:
                 generate_video,
                 preview_characters,
                 *timeline_components["gated_controls"],
+                regeneration_button,
             ],
         )
 
@@ -707,5 +765,5 @@ if __name__ == "__main__":
 # TODO Phase 2: add ComfyUI workflow clients, video assembly, RunPod offload,
 # clip auto-review, and timeline provenance modules with tests.
 # TODO Phase 2: map library scene plans to Regional ControlNets and LayerDiffuse masks.
-# TODO Phase 3.2: connect chat_parser.py edit intents to TimelineClip ids,
-# source time ranges, targeted regeneration jobs, and versioned timeline history.
+# Phase 3.3: targeted regeneration connects chat_parser.py intents to TimelineClip ids,
+# source time ranges, video_assembly replacement jobs, and versioned timeline history.
