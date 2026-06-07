@@ -343,15 +343,27 @@ def run_video_generation_pipeline(
     )
 
 
-def timeline_placeholder(chat_message: str, timeline_notes: str) -> tuple[str, str]:
-    """Parse a simple edit request placeholder and append it to timeline notes."""
+def phase32_chat_edit_stub(chat_message: str, timeline_notes: str) -> tuple[str, str]:
+    """Create a Phase 3.2 chat-parser edit intent stub for timeline notes."""
 
+    clean_message = (chat_message or "").strip()
     timestamp = datetime.now(UTC).replace(microsecond=0).isoformat()
-    entry = f"[{timestamp}] Requested edit: {chat_message or 'No edit text provided.'}"
-    updated_notes = (timeline_notes + "\n" + entry).strip()
+    intent = {
+        "created_at": timestamp,
+        "phase": "3.2_chat_parser_stub",
+        "request": clean_message or "No edit text provided.",
+        "next_steps": [
+            "Parse user request with chat_parser.py into clip_id/time-range targets.",
+            "Generate replacement/transform jobs for the affected TimelineClip entries.",
+            "Re-score edited clips and preserve before/after timeline versions.",
+        ],
+    }
+    updated_notes = (timeline_notes + "\n" + json.dumps(intent, sort_keys=True)).strip()
     response = (
-        "I created a placeholder edit intent. TODO Phase 3: route this through chat_parser.py, "
-        "identify target clips/timeline ranges, regenerate or transform clips, then re-score."
+        "## Phase 3.2 edit intent queued\n"
+        "This is a structured stub for the upcoming Chat Parser workflow. Phase 3.2 will map the request "
+        "to TimelineClip IDs and source/time ranges, then hand targeted regeneration jobs back to the video pipeline.\n\n"
+        "```json\n" + json.dumps(intent, indent=2) + "\n```"
     )
     return response, updated_notes
 
@@ -577,7 +589,7 @@ def build_ui() -> gr.Blocks:
                     "Create 5–10 second clips at 720p, auto-review with Florence-2, smart-loop to longer segments, "
                     "and upscale using SeedVR 2.5 / RTX Video SR / Nomos2. The selected ids should come from the Character Library tab; "
                     "`library.load_for_scene()` will add the locked fixed male when available and load every partner LoRA on top of the General Physics Base LoRA. "
-                    "Phase 3 TODOs: import VideoJobResult sidecars into Timeline, route chat edits to job_id/time ranges, and version replacement clips."
+                    "Phase 3.2 TODO: route chat_parser.py edit intents to TimelineClip ids, source time ranges, and versioned replacement jobs."
                 )
                 scene_prompt = gr.Textbox(label="Scene prompt", lines=5)
                 selected_partners = gr.Textbox(label="Selected library character IDs from Character Library", placeholder="partner_0001, partner_0002")
@@ -612,12 +624,16 @@ def build_ui() -> gr.Blocks:
                     "The adult confirmation gate controls this entire tab."
                 )
                 timeline_components = timeline.build_timeline_editor(initial_interactive=initial_interactive)
-                gr.Markdown("## Chat edit notes placeholder")
-                timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=6)
+                gr.Markdown(
+                    "## Phase 3.2 Chat Parser Stub\n"
+                    "Capture natural-language edit requests as structured intents. The next phase will connect these intents "
+                    "to `chat_parser.py`, TimelineClip IDs, source time ranges, targeted regeneration, and timeline version history."
+                )
+                timeline_notes = gr.Textbox(label="Structured edit intents / clip provenance", lines=6)
                 chat_message = gr.Textbox(label="Chat edit request", placeholder="Fix this transition or slow the whole scene down.")
-                chat_button = gr.Button("Create placeholder edit intent", interactive=initial_interactive)
+                chat_button = gr.Button("Queue Phase 3.2 edit intent", interactive=initial_interactive)
                 chat_response = gr.Markdown()
-                chat_button.click(timeline_placeholder, inputs=[chat_message, timeline_notes], outputs=[chat_response, timeline_notes])
+                chat_button.click(phase32_chat_edit_stub, inputs=[chat_message, timeline_notes], outputs=[chat_response, timeline_notes])
 
         def _gate_update(confirmed: bool) -> list[Any]:
             unlocked = confirmed or not adult_confirmation_required()
@@ -681,3 +697,5 @@ if __name__ == "__main__":
 # TODO Phase 2: add ComfyUI workflow clients, video assembly, RunPod offload,
 # clip auto-review, and timeline provenance modules with tests.
 # TODO Phase 2: map library scene plans to Regional ControlNets and LayerDiffuse masks.
+# TODO Phase 3.2: connect chat_parser.py edit intents to TimelineClip ids,
+# source time ranges, targeted regeneration jobs, and versioned timeline history.

@@ -567,7 +567,12 @@ def render_preview(state_json: str) -> tuple[str, str, list[list[Any]], str | No
     max_preview = _preview_cap_seconds(settings)
     duration = _timeline_duration(state)
     if duration > max_preview:
-        return _ui_payload(state, f"Preview would be {duration:.2f}s, above the local cap of {max_preview:.0f}s. Trim or split the edit first.")
+        message = (
+            f"This timeline is {duration:.2f}s long, which is longer than the {max_preview:.0f}s local preview limit for the "
+            "current hardware profile. Nothing was rendered yet—trim a few clips, split the timeline into sections, "
+            "or save the JSON and render the full edit later in the final assembly/export step."
+        )
+        return _ui_payload(state, message)
 
     opened_clips: list[Any] = []
     subclips: list[Any] = []

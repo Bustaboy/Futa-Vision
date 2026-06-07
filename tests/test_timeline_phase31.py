@@ -8,6 +8,8 @@ import timeline
 
 
 class FakeSourceClip:
+    """Small VideoFileClip stand-in used to verify source trim calls without ffmpeg."""
+
     opened: list[str] = []
     saved_frames: list[tuple[str, float, str]] = []
     subclips: list[tuple[str, float, float]] = []
@@ -25,10 +27,12 @@ class FakeSourceClip:
         self.close()
 
     def subclipped(self, start: float, end: float) -> FakeSegmentClip:
+        # The production code should call MoviePy with already-clamped trim ranges.
         FakeSourceClip.subclips.append((self.path, start, end))
         return FakeSegmentClip(self.path, start, end)
 
     def save_frame(self, path: str, t: float) -> None:
+        # Playhead scrubbing should map timeline time back to the original source time.
         FakeSourceClip.saved_frames.append((self.path, t, path))
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_bytes(b"fake-png")
@@ -38,6 +42,8 @@ class FakeSourceClip:
 
 
 class FakeSegmentClip:
+    """Subclip/final render stand-in that records ffmpeg options and output paths."""
+
     writes: list[tuple[str, dict[str, Any], list[tuple[str, float, float]]]] = []
 
     def __init__(self, path: str, start: float, end: float) -> None:
@@ -56,6 +62,8 @@ class FakeSegmentClip:
 
 
 class FakeFinalClip:
+    """Concatenated clip stand-in so tests can inspect all rendered segments."""
+
     def __init__(self, segments: list[FakeSegmentClip]) -> None:
         self.segments = segments
 
@@ -114,6 +122,8 @@ def patch_timeline_dirs(monkeypatch: Any, tmp_path: Path) -> None:
 
 
 def patch_moviepy(monkeypatch: Any) -> None:
+    """Patch MoviePy and hardware calls so preview tests are deterministic and fast."""
+
     FakeSourceClip.opened.clear()
     FakeSourceClip.saved_frames.clear()
     FakeSourceClip.subclips.clear()
@@ -187,7 +197,8 @@ def test_render_preview_refuses_over_hardware_cap(monkeypatch: Any, tmp_path: Pa
     _state_json, _html, _table, preview_path, status = timeline.render_preview(timeline._dump_state(state))
 
     assert preview_path is None
-    assert "above the local cap of 120s" in status
+    assert "longer than the 120s local preview limit" in status
+    assert "Nothing was rendered yet" in status
     assert FakeSegmentClip.writes == []
 
 
