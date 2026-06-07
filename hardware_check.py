@@ -241,6 +241,43 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
     )
 
 
+def get_low_vram_settings(cache_path: str | Path = "cache") -> dict[str, Any]:
+    """Return hardware-aware low-VRAM defaults for Ostris/ComfyUI callers.
+
+    Phase 0.5 uses this from ``training_orchestrator.py`` so LoRA training
+    defaults to rank 8-16, batch size 1, disk latent caching, checkpointing,
+    FP16/FP8-friendly settings, and INT8 optimizer/weight quantization on
+    RTX 4070-class 8 GB machines.
+    """
+
+    report = collect_hardware_report(cache_path)
+    total_vram = report.gpu.total_vram_gb
+    low_vram = report.recommended_mode in {"local_low_vram", "cloud_recommended"} or (
+        total_vram is None or total_vram <= LOW_VRAM_THRESHOLD_GB
+    )
+    return {
+        "enabled": low_vram,
+        "recommended_mode": report.recommended_mode,
+        "gpu_name": report.gpu.name,
+        "total_vram_gb": total_vram,
+        "free_vram_gb": report.gpu.free_vram_gb,
+        "rank_min": 8,
+        "rank_max": 16,
+        "default_rank": 8 if low_vram else 16,
+        "batch_size": 1,
+        "gradient_accumulation_steps": 4 if low_vram else 2,
+        "gradient_checkpointing": True,
+        "cache_latents_to_disk": True,
+        "mixed_precision": "fp16",
+        "optimizer": "adamw8bit",
+        "weight_quantization": "int8" if low_vram else "fp8",
+        "sample_resolution": 512 if low_vram else 768,
+        "train_text_encoder": False,
+        "num_workers": 1,
+        "fallback": "Offer RunPod offload if CUDA is unavailable or local Ostris training OOMs.",
+    }
+
+
 def report_to_markdown(report: HardwareReport) -> str:
     """Render a human-readable report for Gradio Markdown components."""
 
