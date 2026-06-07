@@ -1,0 +1,56 @@
+# Futa-Vision pinned Python environment.
+# Target runtime: Python 3.12+ on Windows/Linux with an NVIDIA RTX 4070 8 GB local-first workflow.
+#
+# IMPORTANT:
+# - ComfyUI and Ostris AI Toolkit are full applications, not normal PyPI libraries.
+#   They are detected/installed by setup.py so existing Pinokio installs can be reused.
+# - PyTorch CUDA wheels are pinned for CUDA 12.8. If your driver cannot run CUDA 12.8,
+#   install the matching torch/torchvision/torchaudio wheel set manually before this file.
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# Core GPU stack pinned for Wan/LTX/ComfyUI-era workflows.
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+torchaudio==2.7.1+cu128
+
+# Fast-start frontend mandated by the Vibe-Coding Guide: Gradio 5.x.
+gradio==5.49.1
+
+# RunPod cloud offload SDK.
+runpod==1.7.13
+
+# AI workflow dependencies commonly shared by ComfyUI/Ostris integrations.
+accelerate==1.8.1
+diffusers==0.34.0
+transformers==4.53.2
+peft==0.16.0
+safetensors==0.5.3
+huggingface-hub==0.33.4
+sentencepiece==0.2.0
+protobuf==6.31.1
+
+# App configuration, API clients, filesystem checks, and CLI helpers.
+python-dotenv==1.1.1
+pydantic==2.11.7
+pydantic-settings==2.10.1
+httpx==0.28.1
+requests==2.32.4
+psutil==7.0.0
+rich==14.0.0
+typer==0.16.0
+
+# Media/library utilities for thumbnails, previews, and metadata stubs.
+numpy==2.2.6
+pillow==11.3.0
+opencv-python==4.12.0.88
+imageio==2.37.0
+imageio-ffmpeg==0.6.0
+
+# Developer test baseline for Phase 0 skeleton validation.
+pytest==8.4.1
+
+# External application source pins used by setup.py when --install-missing is requested:
+#   Ostris AI Toolkit: https://github.com/ostris/ai-toolkit.git @ main (June 2026 target)
+#   ComfyUI:           https://github.com/comfyanonymous/ComfyUI.git @ master (June 2026 target)
+# Next step: after first successful setup, replace the source branch names above with audited commit SHAs in setup.py.

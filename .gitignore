@@ -1,0 +1,38 @@
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# Large/generated AI assets
+vendor/
+models/
+datasets/**
+outputs/**
+cache/**
+logs/**
+library/**/*.safetensors
+library/**/*.ckpt
+library/**/*.pt
+library/**/*.pth
+library/**/*.png
+library/**/*.jpg
+library/**/*.jpeg
+library/**/*.webp
+
+# Keep skeleton directories tracked
+!datasets/**/.gitkeep
+!outputs/**/.gitkeep
+!cache/.gitkeep
+!logs/.gitkeep
+!library/**/.gitkeep
+!workflows/**/.gitkeep
+
+# Next step: add project-specific ignores for downloaded ComfyUI model folders once model profiles are implemented.
