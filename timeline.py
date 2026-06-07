@@ -19,7 +19,10 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 from uuid import uuid4
 
-import gradio as gr
+try:
+    import gradio as gr
+except ImportError:  # pragma: no cover - tests can exercise backend helpers without Gradio installed.
+    gr = None
 
 import hardware_check
 
@@ -29,6 +32,7 @@ TIMELINE_SCHEMA_VERSION = "phase3.timeline.v1"
 DEFAULT_TIMELINE_DIR = Path("outputs/timelines")
 DEFAULT_PREVIEW_DIR = DEFAULT_TIMELINE_DIR / "previews"
 DEFAULT_THUMBNAIL_DIR = DEFAULT_TIMELINE_DIR / "thumbnails"
+DEFAULT_FRAME_DIR = DEFAULT_TIMELINE_DIR / "frames"
 DEFAULT_STATE_PATH = DEFAULT_TIMELINE_DIR / "current_timeline.json"
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 MAX_PREVIEW_SECONDS_LOW_VRAM = 120.0
@@ -78,7 +82,7 @@ def _utc_now() -> str:
 
 
 def _ensure_dirs(timeline_dir: Path = DEFAULT_TIMELINE_DIR) -> None:
-    for folder in (timeline_dir, DEFAULT_PREVIEW_DIR, DEFAULT_THUMBNAIL_DIR):
+    for folder in (timeline_dir, DEFAULT_PREVIEW_DIR, DEFAULT_THUMBNAIL_DIR, DEFAULT_FRAME_DIR):
         folder.mkdir(parents=True, exist_ok=True)
 
 
@@ -111,6 +115,49 @@ def _clip_subclip(clip: Any, start_time: float, end_time: float) -> Any:
     if hasattr(clip, "subclipped"):
         return clip.subclipped(start_time, end_time)
     return clip.subclip(start_time, end_time)
+
+
+def _preview_cap_seconds(settings: dict[str, Any] | None = None) -> float:
+    """Return a hardware-aware cap for fast local preview rendering."""
+
+    active_settings = settings or hardware_check.get_low_vram_settings()
+    settings_text = json.dumps(active_settings, sort_keys=True).lower()
+    if "4070" in settings_text or active_settings.get("mode") == "rtx_4070_8gb_low_vram":
+        return MAX_PREVIEW_SECONDS_LOW_VRAM
+    return MAX_PREVIEW_SECONDS_STANDARD
+
+
+def _preview_threads(settings: dict[str, Any]) -> int:
+    """Keep MoviePy/ffmpeg responsive on low-VRAM desktop systems."""
+
+    if settings.get("mode") == "rtx_4070_8gb_low_vram":
+        return 2
+    return 4
+
+
+def _preview_write_kwargs(settings: dict[str, Any], has_audio: bool) -> dict[str, Any]:
+    """Use browser/Gradio-friendly MP4 settings for seekable previews."""
+
+    kwargs: dict[str, Any] = {
+        "codec": "libx264",
+        "fps": 24,
+        "preset": "ultrafast",
+        "threads": _preview_threads(settings),
+        "logger": None,
+        "ffmpeg_params": ["-movflags", "+faststart", "-pix_fmt", "yuv420p"],
+    }
+    if has_audio:
+        kwargs.update(
+            {
+                "audio": True,
+                "audio_codec": "aac",
+                "temp_audiofile": str(DEFAULT_PREVIEW_DIR / "timeline_preview_audio.m4a"),
+                "remove_temp": True,
+            }
+        )
+    else:
+        kwargs["audio"] = False
+    return kwargs
 
 
 def _probe_video_duration(video_path: Path) -> float:
@@ -427,9 +474,72 @@ def _timeline_duration(state: TimelineState) -> float:
     return round(sum(max(clip.end_time - clip.start_time, 0.0) for clip in state.clips), 3)
 
 
+def _timeline_segments(state: TimelineState) -> list[dict[str, Any]]:
+    """Map timeline seconds to source clip trim ranges for rendering/scrubbing."""
+
+    cursor = 0.0
+    segments: list[dict[str, Any]] = []
+    for clip in sorted(state.clips, key=lambda item: item.order):
+        start = max(clip.start_time, 0.0)
+        end = max(clip.end_time, start)
+        if clip.duration > 0:
+            start = min(start, clip.duration)
+            end = min(end, clip.duration)
+        segment_duration = max(end - start, 0.0)
+        if segment_duration <= 0:
+            continue
+        segments.append(
+            {
+                "clip": clip,
+                "timeline_start": round(cursor, 3),
+                "timeline_end": round(cursor + segment_duration, 3),
+                "source_start": round(start, 3),
+                "source_end": round(end, 3),
+                "duration": round(segment_duration, 3),
+            }
+        )
+        cursor += segment_duration
+    return segments
+
+
+def _segment_at_playhead(state: TimelineState, playhead_seconds: float) -> tuple[TimelineClip, float] | None:
+    """Return the source clip and source timestamp for a timeline playhead."""
+
+    playhead = max(0.0, playhead_seconds)
+    segments = _timeline_segments(state)
+    if not segments:
+        return None
+    for segment in segments:
+        if segment["timeline_start"] <= playhead < segment["timeline_end"]:
+            offset = playhead - float(segment["timeline_start"])
+            return segment["clip"], round(float(segment["source_start"]) + offset, 3)
+    last = segments[-1]
+    return last["clip"], max(float(last["source_end"]) - 0.05, float(last["source_start"]))
+
+
+def _write_preview_sidecar(preview_path: Path, state: TimelineState, settings: dict[str, Any]) -> None:
+    """Persist a small preview manifest for debugging and future timeline import."""
+
+    sidecar_path = preview_path.with_suffix(preview_path.suffix + ".json")
+    payload = {
+        "schema_version": TIMELINE_SCHEMA_VERSION,
+        "preview_path": str(preview_path),
+        "created_at": _utc_now(),
+        "duration_seconds": _timeline_duration(state),
+        "hardware_mode": settings.get("mode", "unknown"),
+        "clips": [asdict(clip) for clip in sorted(state.clips, key=lambda item: item.order)],
+        "segments": [
+            {key: value for key, value in segment.items() if key != "clip"}
+            | {"clip_id": segment["clip"].id}
+            for segment in _timeline_segments(state)
+        ],
+    }
+    sidecar_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _timeline_status(state: TimelineState, messages: Sequence[str] | None = None) -> str:
     settings = hardware_check.get_low_vram_settings()
-    max_preview = MAX_PREVIEW_SECONDS_LOW_VRAM if "4070" in str(settings).lower() or settings.get("mode") == "rtx_4070_8gb_low_vram" else MAX_PREVIEW_SECONDS_STANDARD
+    max_preview = _preview_cap_seconds(settings)
     lines = [
         "## Timeline Status",
         f"- Clips: `{len(state.clips)}`",
@@ -443,7 +553,7 @@ def _timeline_status(state: TimelineState, messages: Sequence[str] | None = None
 
 
 def render_preview(state_json: str) -> tuple[str, str, list[list[Any]], str | None, str]:
-    """Render the trimmed timeline into a playable MP4 preview with MoviePy."""
+    """Render the trimmed timeline into a seekable MP4 preview with MoviePy."""
 
     _ensure_dirs()
     state = _load_state(state_json)
@@ -454,46 +564,38 @@ def render_preview(state_json: str) -> tuple[str, str, list[list[Any]], str | No
         return _ui_payload(state, "Add at least one clip before rendering a preview.")
 
     settings = hardware_check.get_low_vram_settings()
-    max_preview = MAX_PREVIEW_SECONDS_LOW_VRAM if settings.get("mode") == "rtx_4070_8gb_low_vram" else MAX_PREVIEW_SECONDS_STANDARD
-    if _timeline_duration(state) > max_preview:
-        return _ui_payload(state, f"Preview would be {_timeline_duration(state):.2f}s, above the local cap of {max_preview:.0f}s. Trim or split the edit first.")
+    max_preview = _preview_cap_seconds(settings)
+    duration = _timeline_duration(state)
+    if duration > max_preview:
+        return _ui_payload(state, f"Preview would be {duration:.2f}s, above the local cap of {max_preview:.0f}s. Trim or split the edit first.")
 
     opened_clips: list[Any] = []
     subclips: list[Any] = []
+    final_clip: Any | None = None
+    has_audio = False
     try:
-        for clip_meta in sorted(state.clips, key=lambda item: item.order):
+        for segment in _timeline_segments(state):
+            clip_meta: TimelineClip = segment["clip"]
             source_path = Path(clip_meta.source_path)
             if not source_path.exists():
                 raise FileNotFoundError(f"Missing source clip: {source_path}")
             source_clip = video_file_clip(str(source_path))
             opened_clips.append(source_clip)
-            duration = float(getattr(source_clip, "duration", 0.0) or clip_meta.duration or 0.0)
-            start = min(max(clip_meta.start_time, 0.0), duration)
-            end = min(max(clip_meta.end_time, start), duration)
-            if end <= start:
-                continue
-            subclips.append(_clip_subclip(source_clip, start, end))
+            has_audio = has_audio or getattr(source_clip, "audio", None) is not None
+            subclips.append(_clip_subclip(source_clip, float(segment["source_start"]), float(segment["source_end"])))
         if not subclips:
             return _ui_payload(state, "No clips had a positive trimmed duration.")
         preview_path = DEFAULT_PREVIEW_DIR / f"timeline_preview_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}.mp4"
         final_clip = concatenate(subclips, method="compose") if len(subclips) > 1 else subclips[0]
-        write_kwargs = {
-            "codec": "libx264",
-            "audio_codec": "aac",
-            "fps": 24,
-            "preset": "ultrafast",
-            "logger": None,
-        }
-        try:
-            final_clip.write_videofile(str(preview_path), **write_kwargs)
-        finally:
-            if hasattr(final_clip, "close") and final_clip not in subclips:
-                final_clip.close()
+        final_clip.write_videofile(str(preview_path), **_preview_write_kwargs(settings, has_audio))
+        _write_preview_sidecar(preview_path, state, settings)
         state.preview_path = str(preview_path)
     except Exception as exc:  # noqa: BLE001 - present a Gradio-friendly error.
         LOGGER.exception("Timeline preview render failed")
         return _ui_payload(state, f"Preview render failed: {exc}")
     finally:
+        if final_clip is not None and final_clip not in subclips and hasattr(final_clip, "close"):
+            final_clip.close()
         for clip in subclips:
             if hasattr(clip, "close"):
                 clip.close()
@@ -501,7 +603,34 @@ def render_preview(state_json: str) -> tuple[str, str, list[list[Any]], str | No
             if hasattr(clip, "close"):
                 clip.close()
 
-    return _ui_payload(state, f"Rendered playable timeline preview: `{state.preview_path}`")
+    return _ui_payload(state, f"Rendered seekable timeline preview: `{state.preview_path}`")
+
+
+def scrub_playhead(playhead_seconds: float, state_json: str) -> tuple[str | None, str]:
+    """Extract a source-accurate frame for a timeline playhead position."""
+
+    _ensure_dirs()
+    state = _load_state(state_json)
+    target = _segment_at_playhead(state, _safe_float(playhead_seconds))
+    if target is None:
+        return None, "Add clips with positive trim duration before scrubbing."
+    clip_meta, source_time = target
+    source_path = Path(clip_meta.source_path)
+    if not source_path.exists():
+        return None, f"Missing source clip for playhead preview: `{source_path}`"
+    video_file_clip, _, error = _moviepy_symbols()
+    if video_file_clip is None:
+        return None, f"MoviePy is required for playhead frame extraction: {error}"
+    frame_path = DEFAULT_FRAME_DIR / f"playhead_{clip_meta.id}_{source_time:.3f}.png"
+    try:
+        with video_file_clip(str(source_path)) as clip:
+            duration = float(getattr(clip, "duration", 0.0) or clip_meta.duration or 0.0)
+            frame_time = min(max(source_time, 0.0), max(duration - 0.05, 0.0)) if duration else max(source_time, 0.0)
+            clip.save_frame(str(frame_path), t=frame_time)
+    except Exception as exc:  # noqa: BLE001 - codec issues should not break the app.
+        LOGGER.exception("Timeline playhead frame extraction failed")
+        return None, f"Playhead frame extraction failed: {exc}"
+    return str(frame_path), f"Playhead {playhead_seconds:.2f}s → `{clip_meta.name}` at source {source_time:.2f}s."
 
 
 def save_timeline(state_json: str, save_path: str | None = None) -> tuple[str, str, list[list[Any]], str | None, str, str | None]:
@@ -555,6 +684,9 @@ def build_timeline_editor(initial_interactive: bool = True) -> dict[str, Any]:
     without leaking the implementation details of the timeline layout.
     """
 
+    if gr is None:
+        raise RuntimeError("Gradio is required to build the timeline editor UI.")
+
     _ensure_dirs()
     state_json = gr.Textbox(value=empty_timeline_state_json(), visible=False, label="Timeline state JSON")
 
@@ -588,6 +720,11 @@ def build_timeline_editor(initial_interactive: bool = True) -> dict[str, Any]:
     apply_button = gr.Button("Apply Drag Order / Trim Edits", variant="primary", interactive=initial_interactive)
     preview_button = gr.Button("Render Playable Preview", variant="primary", interactive=initial_interactive)
     preview_video = gr.Video(label="Playable preview with Gradio scrubber", interactive=False)
+    with gr.Row():
+        playhead = gr.Slider(0, MAX_PREVIEW_SECONDS_STANDARD, value=0, step=0.1, label="Playhead scrubber seconds", interactive=initial_interactive)
+        playhead_button = gr.Button("Preview Playhead Frame", variant="secondary", interactive=initial_interactive)
+    playhead_frame = gr.Image(label="Source-accurate playhead frame", type="filepath", interactive=False)
+    playhead_status = gr.Markdown()
     saved_file = gr.File(label="Saved timeline JSON")
 
     add_button.click(add_clips, inputs=[uploaded_clips, state_json], outputs=[state_json, timeline_html, clip_table, preview_video, status])
@@ -596,6 +733,8 @@ def build_timeline_editor(initial_interactive: bool = True) -> dict[str, Any]:
     save_button.click(save_timeline, inputs=[state_json, save_path], outputs=[state_json, timeline_html, clip_table, preview_video, status, saved_file])
     load_button.click(load_timeline, inputs=load_file, outputs=[state_json, timeline_html, clip_table, preview_video, status])
     clear_button.click(clear_timeline, outputs=[state_json, timeline_html, clip_table, preview_video, status])
+    playhead.change(scrub_playhead, inputs=[playhead, state_json], outputs=[playhead_frame, playhead_status])
+    playhead_button.click(scrub_playhead, inputs=[playhead, state_json], outputs=[playhead_frame, playhead_status])
 
     return {
         "state_json": state_json,
@@ -603,5 +742,5 @@ def build_timeline_editor(initial_interactive: bool = True) -> dict[str, Any]:
         "clip_table": clip_table,
         "preview_video": preview_video,
         "status": status,
-        "gated_controls": [add_button, load_button, save_button, clear_button, apply_button, preview_button],
+        "gated_controls": [add_button, load_button, save_button, clear_button, apply_button, preview_button, playhead, playhead_button],
     }

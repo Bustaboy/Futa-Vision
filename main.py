@@ -140,6 +140,7 @@ def ensure_storage(paths: AppPaths) -> None:
         paths.outputs_dir / "timelines",
         paths.outputs_dir / "timelines" / "previews",
         paths.outputs_dir / "timelines" / "thumbnails",
+        paths.outputs_dir / "timelines" / "frames",
         paths.workflows_dir / "comfy",
         paths.workflows_dir / "ostris",
         paths.logs_dir,
