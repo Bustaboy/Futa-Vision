@@ -24,6 +24,7 @@ comfy-cli==1.10.3
 runpod==1.9.1
 
 # Environment/config/runtime helpers.
+# python-dotenv keeps `.env.example` -> `.env` loading clean for Gradio and setup helpers.
 python-dotenv==1.2.2
 pydantic==2.12.4
 pydantic-settings==2.12.0
@@ -35,11 +36,13 @@ rich==14.2.0
 # AI workflow helper libraries used by the future ComfyUI/Ostris client modules.
 huggingface-hub==1.17.0
 safetensors==0.7.0
+# Pillow and opencv-python support image thumbnails, starter-image handling, and future frame sampling.
 Pillow==12.0.0
 numpy==2.3.5
 opencv-python==4.12.0.88
 
-# Test runner for the Phase 0 skeleton.
+# Development/test dependencies for Phase 0 smoke tests.
+# setup.py also exposes pytest through the `dev` extra for contributors who prefer extras-based installs.
 pytest==9.0.1
 
 # External engine note:

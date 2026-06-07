@@ -8,7 +8,7 @@ The canonical project source document is available at:
 
 ## Phase 0 skeleton
 
-The current Phase 0 implementation is a runnable Gradio-first skeleton that mirrors the project roadmap in `docs/source_document.md` and the implementation guidance in `CURSOR_VIBE_CODING_GUIDE.md`.
+The current Phase 0 implementation is a runnable Gradio-first skeleton that mirrors the project roadmap in `docs/source_document.md` and the implementation guidance in `CURSOR_VIBE_CODING_GUIDE.md`. It uses the Phase 0 hardware policy from the source document: RTX 4070-class 8 GB systems should run `local_low_vram` with 720p generation, then final upscale using SeedVR 2.5 / RTX Video SR / Nomos2 after the timeline is approved.
 
 ### How to test Phase 0
 
@@ -43,7 +43,7 @@ The current Phase 0 implementation is a runnable Gradio-first skeleton that mirr
    python -m pytest -q
    ```
 
-7. Launch the Gradio UI and open the Setup tab. Confirm the NSFW/adult banner, verify that the hardware report appears, and then inspect the Library, Create Partner, Generate Video, and Timeline placeholder tabs:
+7. Launch the Gradio UI and open the Setup tab. Confirm the NSFW/adult banner, verify that the live Hardware Status report appears, and then inspect the Library, Create Partner, Generate Video, and Timeline placeholder tabs. If `FUTA_VISION_REQUIRE_ADULT_CONFIRMATION=true`, generation/edit controls remain gated until the checkbox is confirmed:
 
    ```bash
    python main.py

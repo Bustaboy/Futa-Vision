@@ -18,6 +18,10 @@ from typing import Any
 BYTES_PER_GIB = 1024**3
 LOW_VRAM_THRESHOLD_GB = 10.0
 TARGET_LOCAL_VRAM_GB = 8.0
+MIN_RECOMMENDED_CACHE_GB = 100.0
+DEFAULT_STRATEGY = "720p generation + final upscale using SeedVR 2.5 / RTX Video SR / Nomos2"
+DEFAULT_RESOLUTION = "1280x720 (720p)"
+DEFAULT_UPSCALERS = ["SeedVR 2.5", "RTX Video SR", "Nomos2"]
 
 
 @dataclass(slots=True)
@@ -41,6 +45,12 @@ class HardwareReport:
     cache_path: str
     cache_free_gb: float
     recommended_mode: str
+    mode_reason: str
+    default_strategy: str
+    default_resolution: str
+    default_upscalers: list[str]
+    low_vram_threshold_gb: float
+    minimum_recommended_cache_gb: float
     recommendations: list[str]
     warnings: list[str]
 
@@ -146,16 +156,17 @@ def detect_gpu() -> tuple[GPUInfo, bool]:
     )
 
 
-def build_recommendations(gpu: GPUInfo, cache_free_gb: float) -> tuple[str, list[str], list[str]]:
+def build_recommendations(gpu: GPUInfo, cache_free_gb: float) -> tuple[str, list[str], list[str], str]:
     """Create mode recommendation and actionable warnings for Setup UI.
 
-    CUDA-capable 8 GB cards must remain in local low-VRAM mode instead of
-    being treated as cloud-only; cloud is only the default when CUDA is absent
-    or when the user explicitly offloads a heavy job.
+    CUDA-capable cards with 10 GB VRAM or less explicitly use
+    ``local_low_vram`` mode. Cloud is the recommended default only when CUDA is
+    unavailable; otherwise RunPod is offered as an OOM/heavy-job fallback.
     """
 
     recommendations = [
-        "Default to 1280x720 (720p) generation, assemble locally, then upscale after the timeline is approved.",
+        f"Default strategy: {DEFAULT_STRATEGY}.",
+        f"Generate locally at {DEFAULT_RESOLUTION}; assemble clips first, then run the final upscaler.",
         "Keep batch size at 1 for starter images, clips, and low-rank LoRA training.",
         "Enable disk caching and FP8/GGUF workflows where supported by ComfyUI nodes.",
         "Use LTX-2.3 for fast local previews and Wan 2.7 for final physics-heavy clips.",
@@ -164,31 +175,42 @@ def build_recommendations(gpu: GPUInfo, cache_free_gb: float) -> tuple[str, list
 
     if not gpu.cuda_available:
         warnings.append("CUDA GPU not available; use CPU-only diagnostics or RunPod cloud offload.")
-        return "cloud_recommended", recommendations, warnings
-
-    if gpu.total_vram_gb is None:
+        mode_reason = "No CUDA-capable NVIDIA GPU was detected."
+        mode = "cloud_recommended"
+    elif gpu.total_vram_gb is None:
         recommendations.append(
-            "CUDA is available but VRAM size is unknown; use local low-VRAM defaults until detection improves."
+            "CUDA is available but VRAM size is unknown; use local_low_vram defaults until detection improves."
         )
         recommendations.append("Offload training, extension, or final upscale to RunPod if OOM occurs.")
+        mode_reason = "CUDA is available, but VRAM could not be measured safely."
         mode = "local_low_vram"
     elif gpu.total_vram_gb <= LOW_VRAM_THRESHOLD_GB:
         recommendations.append(
-            "Detected 10 GB VRAM or less; RTX 4070-style low-VRAM mode is recommended."
+            f"Detected {gpu.total_vram_gb} GiB VRAM (≤ {LOW_VRAM_THRESHOLD_GB:g} GiB); recommended mode is local_low_vram."
         )
-        recommendations.append("Offload training, extension, or final upscale to RunPod if OOM occurs.")
+        recommendations.append(
+            "Use local_low_vram for RTX 4070-class 8 GB systems: 720p, batch size 1, disk cache, FP8/GGUF where available."
+        )
+        recommendations.append(
+            "Offload training, extension, or final upscale to RunPod only if OOM or turnaround time becomes unacceptable."
+        )
+        mode_reason = f"VRAM is at or below the {LOW_VRAM_THRESHOLD_GB:g} GiB low-VRAM threshold."
         mode = "local_low_vram"
     else:
-        recommendations.append("VRAM is above low-VRAM threshold; local high-quality jobs may be practical.")
+        recommendations.append("VRAM is above the low-VRAM threshold; local balanced/high-quality jobs may be practical.")
+        mode_reason = f"VRAM is above the {LOW_VRAM_THRESHOLD_GB:g} GiB low-VRAM threshold."
         mode = "local_balanced"
 
-    if cache_free_gb < 50:
-        warnings.append("Less than 50 GB free in cache path; video extension and model caches may fail.")
+    if cache_free_gb < MIN_RECOMMENDED_CACHE_GB:
+        warnings.append(
+            f"Disk cache has {cache_free_gb} GiB free; at least {MIN_RECOMMENDED_CACHE_GB:g} GB "
+            "is recommended for video extension, model caches, and upscale intermediates."
+        )
 
     if gpu.total_vram_gb is not None and gpu.total_vram_gb < TARGET_LOCAL_VRAM_GB:
         warnings.append("Detected VRAM below 8 GB; use reduced previews or RunPod for generation.")
 
-    return mode, recommendations, warnings
+    return mode, recommendations, warnings, mode_reason
 
 
 def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
@@ -200,7 +222,7 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
     cache_free_gb = round(disk_usage.free / BYTES_PER_GIB, 2)
 
     gpu, torch_imported = detect_gpu()
-    mode, recommendations, warnings = build_recommendations(gpu, cache_free_gb)
+    mode, recommendations, warnings, mode_reason = build_recommendations(gpu, cache_free_gb)
 
     return HardwareReport(
         gpu=gpu,
@@ -208,6 +230,12 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
         cache_path=str(cache_dir),
         cache_free_gb=cache_free_gb,
         recommended_mode=mode,
+        mode_reason=mode_reason,
+        default_strategy=DEFAULT_STRATEGY,
+        default_resolution=DEFAULT_RESOLUTION,
+        default_upscalers=DEFAULT_UPSCALERS,
+        low_vram_threshold_gb=LOW_VRAM_THRESHOLD_GB,
+        minimum_recommended_cache_gb=MIN_RECOMMENDED_CACHE_GB,
         recommendations=recommendations,
         warnings=warnings,
     )
@@ -218,18 +246,26 @@ def report_to_markdown(report: HardwareReport) -> str:
 
     gpu = report.gpu
     lines = [
-        "## Hardware Check",
-        "**Default strategy:** generate clips at 1280x720 (720p), assemble the timeline, then upscale the approved final video.",
+        "## Hardware Status",
+        f"**Recommended mode:** `{report.recommended_mode}` — {report.mode_reason}",
         "",
+        f"**Default strategy:** {report.default_strategy}.",
+        f"**Default local resolution:** {report.default_resolution}.",
+        f"**Final upscale options:** {', '.join(report.default_upscalers)}.",
+        "",
+        "### GPU / CUDA",
         f"- **GPU:** {gpu.name}",
         f"- **CUDA available:** {gpu.cuda_available}",
         f"- **VRAM total:** {gpu.total_vram_gb if gpu.total_vram_gb is not None else 'unknown'} GiB",
         f"- **VRAM used:** {gpu.used_vram_gb if gpu.used_vram_gb is not None else 'unknown'} GiB",
         f"- **VRAM free:** {gpu.free_vram_gb if gpu.free_vram_gb is not None else 'unknown'} GiB",
         f"- **Detection source:** {gpu.source}",
+        f"- **PyTorch import available:** {report.python_torch_available}",
+        "",
+        "### Disk Cache",
         f"- **Cache path:** {report.cache_path}",
         f"- **Cache free:** {report.cache_free_gb} GiB",
-        f"- **Recommended mode:** {report.recommended_mode}",
+        f"- **Recommended minimum cache:** {report.minimum_recommended_cache_gb:g} GB",
         "",
         "### Recommendations",
     ]
