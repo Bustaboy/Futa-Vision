@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,9 +20,16 @@ import gradio as gr
 from dotenv import load_dotenv
 
 import hardware_check
+import library
 import training_orchestrator
 from hardware_check import report_to_markdown
-from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, weighted_score
+from scoring import (
+    DEFAULT_THRESHOLD,
+    is_approved,
+    rolling_average,
+    score_and_maybe_register_character,
+    weighted_score,
+)
 
 APP_TITLE = "Futa-Vision Director"
 ADULT_CONFIRMATION_ENV = "FUTA_VISION_REQUIRE_ADULT_CONFIRMATION"
@@ -40,24 +47,6 @@ class AppPaths:
     logs_dir: Path = Path("logs")
     ostris_path: Path | None = None
     comfyui_path: Path | None = None
-
-
-@dataclass(slots=True)
-class CharacterRecord:
-    """Portable character metadata record for the Library tab placeholder."""
-
-    id: str
-    display_name: str
-    type: str
-    lora_path: str
-    thumbnail_path: str
-    base_prompt: str
-    negative_prompt: str
-    score_average: float
-    training_profile: str
-    created_at: str
-    tags: list[str] = field(default_factory=list)
-    notes: str = "Reusable partner LoRA."
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -93,7 +82,6 @@ def gate_update(confirmed: bool) -> list[Any]:
     return [
         adult_confirmation_status(confirmed),
         gr.update(visible=not unlocked),
-        *[gr.update(visible=not unlocked) for _ in range(5)],
         *[gr.update(visible=unlocked) for _ in range(5)],
         *[gr.update(interactive=unlocked) for _ in range(4)],
     ]
@@ -126,6 +114,7 @@ def ensure_storage(paths: AppPaths) -> None:
         paths.library_dir / "male" / "backups",
         paths.library_dir / "partners",
         paths.library_dir / "indexes",
+        paths.library_dir / "thumbnails",
         Path("general_physics_lora"),
         paths.datasets_dir / "general_physics",
         paths.datasets_dir / "male",
@@ -170,77 +159,112 @@ def setup_status() -> str:
         "",
         "## Actionable Phase TODOs",
         "- Phase 0: merged baseline Gradio shell, scoring math, setup detection, and hardware reporting.",
-        "- TODO Phase 0.5: validate Ostris-produced checkpoints, add sample-image validation, and archive validation scores next to metadata.",
-        "- TODO Phase 1: replace placeholder library JSON with SQLite/JSON CRUD, searchable thumbnails, weighted scoring grid persistence, and Ostris partner training jobs.",
-        "- TODO Phase 1: add a first-run wizard that registers fixed male, General Physics LoRA, and partner LoRAs into the persistent library index.",
-        "- TODO Phase 1: load the approved General Physics LoRA automatically before partner starter-image generation and partner LoRA training.",
+        "- Phase 0.5: General Physics/Anatomy Base LoRA training artifacts are staged for all partner/fixed-male registrations.",
+        "- Phase 1: SQLite character library, thumbnail cache, searchable tags, scene-loading metadata, and scoring auto-save are active.",
+        "- TODO Phase 1 hardening: replace staged partner LoRA paths with verified Ostris checkpoint discovery and validation-image score persistence.",
         "- TODO Phase 2: add ComfyUI extension checks for IPAdapter, AnimateDiff, Wan extender, LTX, Regional ControlNets, and LayerDiffuse plus RunPod preflight manifests.",
+        "- TODO Phase 2: implement 5–10 second 720p clip generation, auto-review scoring, extension, timeline assembly, and final upscale export.",
     ]
     return "\n".join(lines)
 
 
-def sample_library() -> list[dict[str, Any]]:
-    """Return placeholder library rows until SQLite/JSON indexing is implemented."""
+def library_db_path() -> Path:
+    """Return the configured SQLite database path for the Character Library."""
 
-    created_at = datetime.now(UTC).replace(microsecond=0).isoformat()
-    records = [
-        CharacterRecord(
-            id="male_locked_active",
-            display_name="Locked Male Receiver / POV",
-            type="fixed_male",
-            lora_path="library/male/active/model.safetensors",
-            thumbnail_path="library/male/active/thumb.png",
-            base_prompt="Imported or trained during first-time setup.",
-            negative_prompt="Identity drift, anatomy errors, style mismatch.",
-            score_average=0.0,
-            training_profile="locked_male_low_rank_v1",
-            created_at=created_at,
-            tags=["locked", "pov", "requires-setup"],
-            notes="Must be versioned and protected from accidental overwrite.",
-        ),
-        CharacterRecord(
-            id="general_physics_v1",
-            display_name="General Physics/Anatomy Base LoRA",
-            type="base_physics_lora",
-            lora_path="general_physics_lora/general_physics_v1.0.safetensors",
-            thumbnail_path="datasets/general_physics/physics_reference_01.png",
-            base_prompt="Physics-only prior for anatomy, contact, deformation, weight transfer, and motion plausibility.",
-            negative_prompt="Identity details, colors, hair, clothing, character traits, style drift.",
-            score_average=0.0,
-            training_profile="general_physics_low_rank_v1",
-            created_at=created_at,
-            tags=["physics", "anatomy", "base-lora", "phase-0.5"],
-            notes="Train from the Phase 0.5 tab before partner generation.",
-        ),
-        CharacterRecord(
-            id="partner_template_0001",
-            display_name="Partner Template",
-            type="partner_template",
-            lora_path="library/partners/partner_template_0001/model.safetensors",
-            thumbnail_path="library/partners/partner_template_0001/thumb.png",
-            base_prompt="Create via the Partner tab from text or base image.",
-            negative_prompt="Low score, identity instability, physics failure.",
-            score_average=0.0,
-            training_profile="low_rank_general_physics_v1",
-            created_at=created_at,
-            tags=["template", "needs-training"],
-        ),
-    ]
-    return [asdict(record) for record in records]
+    paths = load_paths()
+    ensure_storage(paths)
+    return library.init_db(paths.library_dir / "indexes" / "characters.sqlite3")
 
 
-def library_json(search_text: str = "") -> str:
-    """Filter placeholder library records by display name, id, type, or tags."""
+def library_records(
+    search_text: str = "", tag_filter: str = "", character_type: str = "all"
+) -> list[dict[str, Any]]:
+    """Search SQLite character records for the Character Library tab."""
 
-    needle = search_text.lower().strip()
-    records = sample_library()
-    if needle:
-        records = [
-            record
-            for record in records
-            if needle in json.dumps(record, sort_keys=True).lower()
+    selected_type = None if character_type == "all" else character_type
+    records = library.search_library(
+        query=search_text or "",
+        tags=tag_filter or None,
+        character_type=selected_type,
+        db_path=library_db_path(),
+    )
+    return library.characters_as_dicts(records)
+
+
+def library_json(
+    search_text: str = "", tag_filter: str = "", character_type: str = "all"
+) -> str:
+    """Render current library rows as pretty JSON for debugging/export."""
+
+    return json.dumps(library_records(search_text, tag_filter, character_type), indent=2)
+
+
+def library_gallery(
+    search_text: str = "", tag_filter: str = "", character_type: str = "all"
+) -> list[tuple[str, str]]:
+    """Return Gradio Gallery entries as cached thumbnails and captions."""
+
+    gallery: list[tuple[str, str]] = []
+    for record in library_records(search_text, tag_filter, character_type):
+        caption = f"{record['id']}\n{record['display_name']}\n#{' #'.join(record['tags'])}"
+        gallery.append((record["thumbnail_path"], caption))
+    return gallery
+
+
+def refresh_library_view(
+    search_text: str, tag_filter: str, character_type: str
+) -> tuple[list[tuple[str, str]], str]:
+    """Refresh both thumbnail grid and JSON details from one set of filters."""
+
+    return (
+        library_gallery(search_text, tag_filter, character_type),
+        library_json(search_text, tag_filter, character_type),
+    )
+
+
+def use_character_in_scene(character_id: str, current_scene_ids: str) -> tuple[str, str]:
+    """Append a character ID to the multi-character scene builder."""
+
+    clean_id = character_id.strip()
+    if not clean_id:
+        return current_scene_ids, "Enter or paste a character ID first."
+    record = library.get_character(clean_id, db_path=library_db_path())
+    if record is None:
+        return current_scene_ids, f"Character not found: `{clean_id}`"
+    ids = [item.strip() for item in current_scene_ids.split(",") if item.strip()]
+    if clean_id not in ids:
+        ids.append(clean_id)
+    return ", ".join(ids), f"Added **{record.display_name}** to the scene builder."
+
+
+def build_library_scene_package(scene_ids: str, scene_prompt: str) -> str:
+    """Build regional-prompt metadata for selected library characters."""
+
+    try:
+        package = library.load_for_scene(
+            scene_ids,
+            scene_prompt=scene_prompt,
+            db_path=library_db_path(),
+            include_fixed_male=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface library errors in Gradio.
+        return json.dumps({"ok": False, "error": str(exc)}, indent=2)
+    return json.dumps(package, indent=2)
+
+
+def _parse_scores(prior_scores_text: str) -> list[float]:
+    """Parse comma-separated score text from the Gradio scoring flow."""
+
+    if not prior_scores_text.strip():
+        return []
+    try:
+        return [
+            float(item.strip())
+            for item in prior_scores_text.split(",")
+            if item.strip()
         ]
-    return json.dumps(records, indent=2)
+    except ValueError as exc:
+        raise ValueError("Prior scores must be comma-separated numbers.") from exc
 
 
 def score_partner_batch(
@@ -248,35 +272,66 @@ def score_partner_batch(
     physics: float,
     style: float,
     prior_scores_text: str,
-) -> tuple[str, str]:
-    """Score a placeholder partner image and report approval status."""
+    display_name: str,
+    trigger_word: str,
+    lora_path: str,
+    tags: str,
+    save_as_fixed_male: bool,
+    reference_image_path: str | None,
+) -> tuple[str, str, str, list[tuple[str, str]]]:
+    """Score a partner sample and auto-register at an 80+ last-10 average."""
 
-    prior_scores: list[float] = []
-    if prior_scores_text.strip():
-        prior_scores = [
-            float(item.strip()) for item in prior_scores_text.split(",") if item.strip()
-        ]
+    try:
+        prior_scores = _parse_scores(prior_scores_text)
+        score, scores, character = score_and_maybe_register_character(
+            anatomy,
+            physics,
+            style,
+            prior_scores,
+            display_name=display_name or "Approved Partner",
+            lora_path=(
+                lora_path
+                or f"library/partners/{display_name or 'approved_partner'}/model.safetensors"
+            ),
+            trigger_word=trigger_word or display_name or "approved_partner",
+            reference_images=[reference_image_path] if reference_image_path else None,
+            tags=tags,
+            save_as_fixed_male=save_as_fixed_male,
+            db_path=library_db_path(),
+        )
+    except Exception as exc:  # noqa: BLE001 - report user-fixable errors in the UI.
+        return (
+            f"## ❌ Score registration failed\n{exc}",
+            prior_scores_text,
+            library_json(),
+            library_gallery(),
+        )
 
-    score = weighted_score(anatomy, physics, style)
-    scores = [*prior_scores, score]
     rolling = rolling_average(scores)
-    approved = is_approved(scores)
+    approved = character is not None
     status = (
-        "APPROVED for Ostris partner LoRA training"
+        "APPROVED and saved to Character Library"
         if approved
         else "KEEP GENERATING/SCORING"
     )
-
+    saved_line = f"- Saved character ID: `{character.id}`\n" if character else ""
     markdown = (
         f"## Partner Score\n"
         f"- Weighted score: **{score}**\n"
         f"- Rolling last-10 average: **{rolling}**\n"
         f"- Threshold: **{DEFAULT_THRESHOLD}+**\n"
-        f"- Status: **{status}**\n\n"
-        "TODO Phase 1: replace this placeholder with a persistent 10–20 image scoring grid backed by ComfyUI outputs."
+        f"- Status: **{status}**\n"
+        f"{saved_line}\n"
+        "All approved characters are registered with a training dependency on the "
+        "Phase 0.5 General Physics/Anatomy Base LoRA. TODO Phase 1 hardening: "
+        "replace staged LoRA paths with verified Ostris partner checkpoints."
     )
-    return markdown, ", ".join(str(item) for item in scores)
-
+    return (
+        markdown,
+        ", ".join(str(item) for item in scores),
+        library_json(),
+        library_gallery(),
+    )
 
 def build_generation_plan(
     scene_prompt: str,
@@ -295,6 +350,11 @@ def build_generation_plan(
         "target_pipeline": pipeline,
         "selected_partners": selected_partners,
         "scene_prompt": scene_prompt,
+        "library_scene_package": (
+            json.loads(build_library_scene_package(selected_partners, scene_prompt))
+            if selected_partners.strip()
+            else {}
+        ),
         "quality_gate": "discard/regenerate below auto-review score 80",
         "fallbacks": [
             "reduce batch size",
@@ -303,7 +363,10 @@ def build_generation_plan(
             "switch preview/final pipeline",
             "offer RunPod offload",
         ],
-        "todo_next": "Phase 2: replace this dry-run plan with ComfyUI workflow submission and clip auto-review.",
+        "todo_next": (
+            "Phase 2: replace this dry-run plan with ComfyUI workflow submission, "
+            "regional prompts, clip auto-review, extension, timeline assembly, and final upscale."
+        ),
     }
     return "```json\n" + json.dumps(plan, indent=2) + "\n```"
 
@@ -411,7 +474,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 0 merged. Now implementing Phase 0.5: General Physics/Anatomy Base LoRA trainer."
+            "Phase 1: Full Character Library + enhanced scoring integration on top of the Phase 0.5 General Physics/Anatomy Base LoRA."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
@@ -457,8 +520,8 @@ def build_ui() -> gr.Blocks:
             demo.load(training_defaults_markdown, outputs=training_defaults_output)
             gr.Markdown(phase0_test_markdown())
 
-        with gr.Tab("Train General Physics LoRA"):
-            with gr.Group(visible=not initial_interactive) as training_locked_group:
+        with gr.Tab("Train General Physics LoRA", visible=initial_interactive) as training_tab:
+            with gr.Group(visible=False):
                 gr.Markdown(
                     "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access the training workflow."
                 )
@@ -530,65 +593,121 @@ def build_ui() -> gr.Blocks:
                     outputs=[training_status, training_logs, training_artifact],
                 )
 
-        with gr.Tab("Library"):
-            with gr.Group(visible=not initial_interactive) as library_locked_group:
-                gr.Markdown(
-                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to browse LoRA/library records."
-                )
+        with gr.Tab("Character Library", visible=initial_interactive) as library_tab:
             with gr.Group(visible=initial_interactive) as library_group:
                 gr.Markdown(
-                    "Browse fixed male, General Physics/Anatomy Base LoRA, and partner records. "
-                    "TODO Phase 1: replace placeholder JSON with SQLite-backed thumbnails, tags, favorites, and one-click LoRA loading. "
-                    "TODO Phase 1: add import/backup/version controls for every registered LoRA."
+                    "Browse fixed male and partner LoRAs from the SQLite library. Thumbnails are cached locally, "
+                    "filters support tags such as `futa`, `slime`, and `femboy`, and scene packages include regional prompts. "
+                    "TODO Phase 2: send selected regional prompts to ComfyUI masks/ControlNets, generate 720p clips, auto-score, extend, assemble, and upscale."
                 )
-                library_search = gr.Textbox(label="Search by id, name, type, or tag")
+                with gr.Row():
+                    library_search = gr.Textbox(label="Search by id, name, trigger, notes, or tag")
+                    tag_filter = gr.Textbox(label="Required tags (comma-separated)", placeholder="futa, slime, femboy")
+                    type_filter = gr.Dropdown(
+                        ["all", "fixed_male", "partner", "base_physics_lora"],
+                        value="all",
+                        label="Type filter",
+                    )
+                refresh_library = gr.Button("Refresh Character Library", variant="secondary")
+                library_grid = gr.Gallery(label="Searchable thumbnail grid", columns=4, height=420)
                 library_output = gr.Code(label="Library records", language="json")
-                library_search.change(
-                    library_json, inputs=library_search, outputs=library_output
-                )
-                demo.load(library_json, outputs=library_output)
+                gr.Markdown("### One-click Use in Scene / Multi-character Builder")
+                with gr.Row():
+                    use_character_id = gr.Textbox(label="Character ID to use", placeholder="Paste an ID from the grid or JSON")
+                    scene_builder_ids = gr.Textbox(
+                        label="Scene builder IDs (drag/drop or paste comma-separated IDs)",
+                        placeholder="partner_1, partner_2",
+                    )
+                use_character_button = gr.Button("Use in Scene")
+                use_character_status = gr.Markdown()
+                library_scene_prompt = gr.Textbox(label="Scene prompt for regional package", lines=3)
+                scene_package_button = gr.Button("Build regional prompt package", variant="primary")
+                scene_package_output = gr.Code(label="Scene package JSON", language="json")
+                gr.Button("Create New Partner → use the Create Partner tab", interactive=False)
 
-        with gr.Tab("Create Partner"):
-            with gr.Group(visible=not initial_interactive) as partner_locked_group:
-                gr.Markdown(
-                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access partner creation."
+                refresh_library.click(
+                    refresh_library_view,
+                    inputs=[library_search, tag_filter, type_filter],
+                    outputs=[library_grid, library_output],
                 )
+                library_search.change(
+                    refresh_library_view,
+                    inputs=[library_search, tag_filter, type_filter],
+                    outputs=[library_grid, library_output],
+                )
+                tag_filter.change(
+                    refresh_library_view,
+                    inputs=[library_search, tag_filter, type_filter],
+                    outputs=[library_grid, library_output],
+                )
+                type_filter.change(
+                    refresh_library_view,
+                    inputs=[library_search, tag_filter, type_filter],
+                    outputs=[library_grid, library_output],
+                )
+                use_character_button.click(
+                    use_character_in_scene,
+                    inputs=[use_character_id, scene_builder_ids],
+                    outputs=[scene_builder_ids, use_character_status],
+                )
+                scene_package_button.click(
+                    build_library_scene_package,
+                    inputs=[scene_builder_ids, library_scene_prompt],
+                    outputs=scene_package_output,
+                )
+                demo.load(refresh_library_view, outputs=[library_grid, library_output])
+
+        with gr.Tab("Create Partner", visible=initial_interactive) as partner_tab:
             with gr.Group(visible=initial_interactive) as partner_group:
                 gr.Markdown(
-                    "Generate 10–20 starter images, manually score Anatomy/Physics/Style, "
-                    "and train a partner LoRA when the last-10 average reaches 80+. "
-                    "TODO Phase 0.5: load the approved General Physics/Anatomy Base LoRA before partner image generation. "
-                    "TODO Phase 1: persist score rows and launch Ostris training when approved. "
-                    "TODO Phase 1: require the approved General Physics LoRA before partner generation begins."
+                    "Generate 10–20 starter images at the hardware-aware 720p default, manually score Anatomy/Physics/Style, "
+                    "and auto-save a reusable character when the last-10 average reaches 80+. "
+                    "All registrations record a dependency on the Phase 0.5 General Physics/Anatomy Base LoRA. "
+                    "TODO Phase 2: replace placeholder image scoring with ComfyUI starter-image batches, auto-preview, and clip validation."
                 )
                 partner_prompt = gr.Textbox(label="Partner prompt", lines=4)
-                base_image = gr.Image(label="Optional base image", type="filepath")
+                base_image = gr.Image(label="Optional base/reference image", type="filepath")
                 with gr.Row():
-                    anatomy = gr.Slider(
-                        0, 100, value=80, step=1, label="Anatomy score (40%)"
-                    )
-                    physics = gr.Slider(
-                        0, 100, value=80, step=1, label="Physics score (40%)"
-                    )
-                    style = gr.Slider(
-                        0, 100, value=80, step=1, label="Style score (20%)"
-                    )
-                prior_scores = gr.Textbox(
-                    label="Prior weighted scores (comma-separated)"
+                    partner_name = gr.Textbox(label="Character display name", value="Approved Partner")
+                    trigger_word = gr.Textbox(label="Trigger word", value="approved_partner")
+                    planned_lora_path = gr.Textbox(label="Planned/Trained LoRA path", value="library/partners/approved_partner/model.safetensors")
+                partner_tags = gr.Textbox(label="Tags", value="partner", placeholder="futa, slime, femboy")
+                save_fixed_male = gr.Checkbox(
+                    label="Save as protected fixed male / POV receiver (refuses overwrite unless database is empty)",
+                    value=False,
                 )
-                score_button = gr.Button(
-                    "Score placeholder image", interactive=initial_interactive
-                )
+                with gr.Row():
+                    anatomy = gr.Slider(0, 100, value=80, step=1, label="Anatomy score (40%)")
+                    physics = gr.Slider(0, 100, value=80, step=1, label="Physics score (40%)")
+                    style = gr.Slider(0, 100, value=80, step=1, label="Style score (20%)")
+                prior_scores = gr.Textbox(label="Prior weighted scores (comma-separated)")
+                score_button = gr.Button("Score image / auto-save if approved", interactive=initial_interactive)
                 score_output = gr.Markdown()
                 generated_scores = gr.Textbox(label="Updated weighted scores")
                 score_button.click(
                     score_partner_batch,
-                    inputs=[anatomy, physics, style, prior_scores],
-                    outputs=[score_output, generated_scores],
+                    inputs=[
+                        anatomy,
+                        physics,
+                        style,
+                        prior_scores,
+                        partner_name,
+                        trigger_word,
+                        planned_lora_path,
+                        partner_tags,
+                        save_fixed_male,
+                        base_image,
+                    ],
+                    outputs=[
+                        score_output,
+                        generated_scores,
+                        library_output,
+                        library_grid,
+                    ],
                 )
 
-        with gr.Tab("Generate Video"):
-            with gr.Group(visible=not initial_interactive) as generate_locked_group:
+        with gr.Tab("Generate Video", visible=initial_interactive) as generate_tab:
+            with gr.Group(visible=False):
                 gr.Markdown(
                     "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access generation planning."
                 )
@@ -631,8 +750,8 @@ def build_ui() -> gr.Blocks:
                     outputs=plan_output,
                 )
 
-        with gr.Tab("Timeline"):
-            with gr.Group(visible=not initial_interactive) as timeline_locked_group:
+        with gr.Tab("Timeline", visible=initial_interactive) as timeline_tab:
+            with gr.Group(visible=False):
                 gr.Markdown(
                     "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access timeline editing."
                 )
@@ -665,16 +784,11 @@ def build_ui() -> gr.Blocks:
             outputs=[
                 confirmation_status,
                 adult_gate_banner,
-                training_locked_group,
-                library_locked_group,
-                partner_locked_group,
-                generate_locked_group,
-                timeline_locked_group,
-                training_group,
-                library_group,
-                partner_group,
-                generate_group,
-                timeline_group,
+                training_tab,
+                library_tab,
+                partner_tab,
+                generate_tab,
+                timeline_tab,
                 start_training,
                 score_button,
                 generate_plan,
@@ -697,7 +811,6 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# TODO Phase 0.5: add validation-sample scoring for the General Physics LoRA.
-# TODO Phase 1: split placeholders into `library_index.py`, `comfy_client.py`,
-# `video_assembly.py`, `chat_parser.py`, and `runpod_client.py` with tests.
-# TODO Phase 1: persist General Physics LoRA approval metadata before enabling partner workflows.
+# TODO Phase 2: add ComfyUI client submission for 720p Wan/LTX clip generation.
+# TODO Phase 2: connect library.load_for_scene() regional prompts to masks/ControlNets.
+# TODO Phase 2: implement video auto-scoring, extension, timeline assembly, and final upscaling.

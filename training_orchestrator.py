@@ -915,3 +915,44 @@ def gradio_train_general_physics_lora(
         "\n".join(result.get("logs", live_logs)),
         json.dumps(result.get("artifact", result), indent=2),
     )
+
+
+def partner_training_metadata(
+    *,
+    display_name: str,
+    output_lora_path: str,
+    score_average: float,
+    save_as_fixed_male: bool = False,
+    extra_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return Phase 1 metadata for a character LoRA trained on the base LoRA.
+
+    Phase 1 still uses a dry-run/staged integration for partner training.  This
+    metadata is consumed by ``scoring.register_approved_character`` and
+    ``library.add_character`` so every approved character is auditable and tied
+    to the Phase 0.5 General Physics/Anatomy Base LoRA before Phase 2 generation
+    consumes it.
+    """
+
+    settings = hardware_check.get_low_vram_settings()
+    base_lora_path = str(
+        (DEFAULT_OUTPUT_DIR / "general_physics_v1.0.safetensors").resolve()
+    )
+    return {
+        "training_profile": (
+            "fixed_male_low_rank_general_physics_v1"
+            if save_as_fixed_male
+            else "partner_low_rank_general_physics_v1"
+        ),
+        "display_name": display_name,
+        "output_lora_path": output_lora_path,
+        "base_lora_path": base_lora_path,
+        "requires_base_lora": base_lora_path,
+        "score_average": float(score_average),
+        "target_resolution": settings.get("resolution", "1280x720 (720p)"),
+        "low_vram_settings": settings,
+        "protected_fixed_male": bool(save_as_fixed_male),
+        "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "todo": "Phase 1 production path: launch Ostris partner/fixed-male training with this base LoRA before registration.",
+        **(extra_metadata or {}),
+    }
