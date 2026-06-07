@@ -64,3 +64,38 @@ python -m pytest -q
 ```
 
 Next implementation target: Phase 1 will turn the placeholder library into persistent LoRA/library indexing, register the approved General Physics LoRA, and use it automatically before partner generation and partner LoRA training.
+
+## Phase 2 Complete
+
+Phase 2 adds the video-generation pipeline shell around the Phase 1 Character Library. The implementation is executor-ready but still local-safe: it writes deterministic placeholder `.mp4` files plus strict `VideoJobResult` JSON sidecars for every stage until real ComfyUI/RunPod workers are connected.
+
+Basic usage:
+
+1. Register or verify Character Library entries for the locked fixed male and any partner LoRAs.
+2. Launch the app:
+
+   ```bash
+   python main.py
+   ```
+
+3. Open **Generate Video**, paste Character Library IDs, and click **Preview selected characters** to confirm the thumbnails that will be loaded into the scene.
+4. Choose **LTX for speed** or **Wan for physics**, keep the default 720p local generation strategy, and set the smart-loop target duration.
+5. Click **Build generation plan** to inspect hardware-aware settings, or **Generate Video** to run the placeholder Phase 2 chain:
+   - short clip generation manifest with General Physics Base LoRA + character LoRAs,
+   - Florence-2-style auto-review with explicit skin stretch, slime viscosity, depressed-contact, pressure-deformation, anatomy, and consistency checks,
+   - smart-loop extension with 15-frame overlap and disk-space safety checks for long extensions,
+   - final upscale sidecar using SeedVR 2.5 / RTX Video SR / Nomos2 temporal-consistency metadata.
+
+Phase 2 test command:
+
+```bash
+python -m pytest -q tests/test_video_assembly_phase2.py
+```
+
+Full regression command:
+
+```bash
+python -m pytest -q
+```
+
+Next implementation target: Phase 3 will import `VideoJobResult` sidecars into Timeline + Chat Editing, route chat edits to `job_id`/clip time ranges, generate reversible replacement clips, and track review deltas across timeline versions.

@@ -31,6 +31,9 @@ DEFAULT_RESOLUTION = "1280x720"
 LOWER_FALLBACK_RESOLUTION = "960x540"
 DEFAULT_REVIEW_THRESHOLD = 80.0
 SMART_LOOP_OVERLAP_FRAMES = 15
+LONG_EXTENSION_THRESHOLD_SECONDS = 30
+MIN_FREE_DISK_FOR_LONG_EXTENSION_GB = 10.0
+BYTES_PER_GIB = 1024**3
 DEFAULT_SHORT_CLIP_SECONDS = 8
 MIN_SHORT_CLIP_SECONDS = 5
 MAX_SHORT_CLIP_SECONDS = 10
@@ -316,6 +319,43 @@ def _output_dir_from_sidecar(sidecar: dict[str, Any], fallback_artifact: Path) -
     return DEFAULT_OUTPUT_DIR
 
 
+def _disk_free_gb(path: Path) -> float:
+    """Return free disk space in GiB for the filesystem containing ``path``."""
+
+    path.mkdir(parents=True, exist_ok=True)
+    return round(shutil.disk_usage(path).free / BYTES_PER_GIB, 2)
+
+
+def _extension_disk_safety(output_dir: Path, target_duration: int) -> dict[str, Any]:
+    """Check free disk before long smart-loop extensions.
+
+    Long extension passes can create large frame caches once real Wan/LTX workers
+    are connected, so fail early when the output filesystem is clearly too full.
+    """
+
+    free_gb = _disk_free_gb(output_dir)
+    safety = {
+        "checked": target_duration >= LONG_EXTENSION_THRESHOLD_SECONDS,
+        "free_gb": free_gb,
+        "minimum_required_gb": MIN_FREE_DISK_FOR_LONG_EXTENSION_GB,
+        "target_duration_seconds": target_duration,
+    }
+    if safety["checked"] and free_gb < MIN_FREE_DISK_FOR_LONG_EXTENSION_GB:
+        raise VideoPipelineError(
+            "Insufficient disk space for long smart-loop extension: "
+            f"{free_gb} GiB free, require at least {MIN_FREE_DISK_FOR_LONG_EXTENSION_GB:g} GiB."
+        )
+    return safety
+
+
+AUTO_REVIEW_PROMPT = (
+    "Florence-2 video QA prompt: score physics, anatomy, and consistency. "
+    "Physics must explicitly inspect skin stretch, slime viscosity and flow, depressed contact surfaces, "
+    "pressure deformation, collision response, jiggle continuity, and first/last-frame temporal stability. "
+    "Reject below 80 if anatomy, character identity, contact physics, or temporal consistency breaks."
+)
+
+
 def generate_short_clip(
     scene_config: dict[str, Any],
     duration: int = DEFAULT_SHORT_CLIP_SECONDS,
@@ -407,6 +447,7 @@ def smart_loop_extension(
     source_payload = source_sidecar.get("payload", {})
     original_duration = int(source_payload.get("duration_seconds") or DEFAULT_SHORT_CLIP_SECONDS)
     target_duration = max(int(target_duration), original_duration)
+    disk_safety = _extension_disk_safety(output_dir, target_duration)
     job_id = f"{source_sidecar.get('job_id', source.stem)}_extend_{target_duration}s"
     extended_path = output_dir / "extended_clips" / f"{job_id}.mp4"
     sidecar_path = _sidecar_path_for(extended_path)
@@ -420,6 +461,7 @@ def smart_loop_extension(
         "target_duration_seconds": target_duration,
         "original_duration_seconds": original_duration,
         "output_dir": str(output_dir),
+        "disk_safety": disk_safety,
         "extension_stack": ["Wan-video-extender v2.0", "LTX-2.3 multi-extend"],
         "looping": {
             "anchor_keyframes": True,
@@ -477,6 +519,15 @@ def auto_review(clip_path: str, progress: ProgressCallback | Any | None = None) 
         "reason": reason,
         "category_scores": category_scores,
         "review_model": "Florence-2 vision-LLM placeholder",
+        "review_prompt": AUTO_REVIEW_PROMPT,
+        "physics_focus": [
+            "skin stretch",
+            "slime viscosity and flow",
+            "depressed contact surfaces",
+            "pressure deformation",
+            "collision response",
+            "jiggle continuity",
+        ],
         "discard_policy": "discard/regenerate below 80 before extension or upscale",
     }
     warnings: list[str] = []
@@ -500,7 +551,7 @@ def auto_review(clip_path: str, progress: ProgressCallback | Any | None = None) 
         sidecar_path=str(review_path),
         payload=payload,
         created_at=_utc_now(),
-        logs=["Review categories: physics, anatomy, consistency."],
+        logs=["Review categories: physics, anatomy, consistency, with explicit skin/slime/contact physics checks."],
         warnings=warnings,
     )
     _write_json(review_path, result.to_dict())

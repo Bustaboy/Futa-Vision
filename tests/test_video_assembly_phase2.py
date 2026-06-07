@@ -150,6 +150,10 @@ def test_auto_review_rejects_below_threshold_and_records_enveloped_reason(tmp_pa
     sidecar = _sidecar(review)
     assert sidecar["stage"] == "auto_review"
     assert sidecar["payload"]["discard_policy"] == "discard/regenerate below 80 before extension or upscale"
+    assert "skin stretch" in sidecar["payload"]["review_prompt"]
+    assert "slime viscosity" in sidecar["payload"]["review_prompt"]
+    assert "depressed contact surfaces" in sidecar["payload"]["review_prompt"]
+    assert "pressure deformation" in sidecar["payload"]["physics_focus"]
     assert video_assembly.validate_video_sidecar(review.sidecar_path, expected_stage="auto_review") == []
 
 
@@ -169,8 +173,39 @@ def test_smart_loop_extension_uses_anchor_keyframes_overlap_and_valid_sidecar(tm
     assert sidecar["payload"]["looping"]["anchor_keyframes"] is True
     assert sidecar["payload"]["looping"]["first_last_frame_alignment"] is True
     assert sidecar["payload"]["looping"]["overlap_frames"] == 15
+    assert sidecar["payload"]["disk_safety"]["checked"] is False
     assert "Wan-video-extender v2.0" in sidecar["payload"]["extension_stack"]
     assert video_assembly.validate_video_sidecar(extended.sidecar_path, expected_stage="smart_loop_extension") == []
+
+
+
+def test_smart_loop_extension_checks_disk_space_before_long_extensions(
+    tmp_path: Path, character_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Long extensions should fail early when the output disk is too full."""
+
+    clip = video_assembly.generate_short_clip(
+        {"selected_character_ids": "partner_a", "db_path": character_db, "output_dir": tmp_path / "outputs"},
+        duration=8,
+    )
+    monkeypatch.setattr(video_assembly, "_disk_free_gb", lambda _path: 1.0)
+
+    with pytest.raises(video_assembly.VideoPipelineError, match="Insufficient disk space"):
+        video_assembly.smart_loop_extension(clip.artifact_path, target_duration=45)
+
+
+def test_smart_loop_extension_records_disk_safety_for_long_extensions(tmp_path: Path, character_db: Path) -> None:
+    """Long extension sidecars should include the disk-space safety decision."""
+
+    clip = video_assembly.generate_short_clip(
+        {"selected_character_ids": "partner_a", "db_path": character_db, "output_dir": tmp_path / "outputs"},
+        duration=8,
+    )
+    extended = video_assembly.smart_loop_extension(clip.artifact_path, target_duration=45)
+
+    sidecar = _sidecar(extended)
+    assert sidecar["payload"]["disk_safety"]["checked"] is True
+    assert sidecar["payload"]["disk_safety"]["minimum_required_gb"] == 10.0
 
 
 def test_final_upscale_uses_seedvr_rtx_nomos_and_preserves_input_sidecars(tmp_path: Path, character_db: Path) -> None:

@@ -222,6 +222,33 @@ def create_partner_tab_hint() -> dict[str, Any]:
     return gr.update(selected="Create Partner")
 
 
+def preview_scene_characters(selected_character_ids: str) -> tuple[list[tuple[str, str]], str]:
+    """Preview selected Character Library thumbnails before video generation."""
+
+    ids = [item.strip() for item in character_library.normalize_string_list(selected_character_ids)]
+    records = []
+    missing: list[str] = []
+    fixed = character_library.search_library(character_type="fixed_male", limit=1)
+    if fixed and fixed[0].id not in ids:
+        ids.insert(0, fixed[0].id)
+    for character_id in ids:
+        record = character_library.get_character(character_id)
+        if record is None:
+            missing.append(character_id)
+        else:
+            records.append(record)
+    gallery = character_library.characters_to_gallery(records)
+    if not records and not missing:
+        return [], "No character IDs selected yet. Copy IDs from the Character Library tab to preview them here."
+    lines = ["## Scene character preview"]
+    if records:
+        lines.append("Loaded before generation: " + ", ".join(f"`{record.id}`" for record in records))
+    if missing:
+        lines.append("Missing IDs: " + ", ".join(f"`{item}`" for item in missing))
+    lines.append("The locked fixed male is included automatically when registered, matching `video_assembly.generate_short_clip()`.")
+    return gallery, "\n".join(lines)
+
+
 def score_partner_batch(
     anatomy: float,
     physics: float,
@@ -549,6 +576,11 @@ def build_ui() -> gr.Blocks:
                 )
                 scene_prompt = gr.Textbox(label="Scene prompt", lines=5)
                 selected_partners = gr.Textbox(label="Selected library character IDs from Character Library", placeholder="partner_0001, partner_0002")
+                preview_characters = gr.Button("Preview selected characters", variant="secondary", interactive=initial_interactive)
+                selected_preview_gallery = gr.Gallery(label="Selected character preview", columns=4, height=220)
+                selected_preview_status = gr.Markdown()
+                selected_partners.change(preview_scene_characters, inputs=selected_partners, outputs=[selected_preview_gallery, selected_preview_status])
+                preview_characters.click(preview_scene_characters, inputs=selected_partners, outputs=[selected_preview_gallery, selected_preview_status])
                 scene_type = gr.Radio(["single", "threesome", "gangbang"], value="single", label="Scene layout")
                 pipeline = gr.Radio(["LTX for speed", "Wan for physics"], value="LTX for speed", label="Pipeline selector")
                 with gr.Row():
@@ -597,6 +629,7 @@ def build_ui() -> gr.Blocks:
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
             ]
 
         adult_confirmed.change(
@@ -617,6 +650,7 @@ def build_ui() -> gr.Blocks:
                 score_button,
                 generate_plan,
                 generate_video,
+                preview_characters,
             ],
         )
 
