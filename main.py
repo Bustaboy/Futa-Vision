@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 
 import hardware_check
 import library as character_library
+import timeline
 import training_orchestrator
 import video_assembly
 from hardware_check import report_to_markdown
@@ -600,13 +601,14 @@ def build_ui() -> gr.Blocks:
                     outputs=[plan_output, pipeline_json, final_video_file],
                 )
 
-            with gr.Tab("Timeline", id="Timeline", visible=initial_interactive) as timeline_tab:
+            with gr.Tab("Timeline & Edit", id="Timeline & Edit", visible=initial_interactive) as timeline_tab:
+                timeline_controls = timeline.build_timeline_tab(initial_interactive=initial_interactive)
                 gr.Markdown(
-                    "Playable timeline placeholder with edit chat. "
-                    "TODO Phase 2: add clip provenance, reorder/trim/replace metadata, final upscale export, and video pipeline status queues. "
-                    "TODO Phase 3: connect chat edits to VideoJobResult job_id/time ranges, targeted regeneration, timeline version history, and review deltas."
+                    "### Phase 3 chat-edit staging\n"
+                    "Use this note area to capture edit intent while the dedicated chat parser is built. "
+                    "Future Phase 3 work will map these requests to clip ids, trim ranges, replacements, transitions, and version history."
                 )
-                timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=10)
+                timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=8)
                 chat_message = gr.Textbox(label="Chat edit request", placeholder="Fix this transition or slow the whole scene down.")
                 chat_button = gr.Button("Create placeholder edit intent", interactive=initial_interactive)
                 chat_response = gr.Markdown()
@@ -622,7 +624,7 @@ def build_ui() -> gr.Blocks:
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
-                gr.update(selected="Setup" if not unlocked else "Character Library"),
+                gr.update(selected="Setup" if not unlocked else "Timeline & Edit"),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
@@ -630,6 +632,7 @@ def build_ui() -> gr.Blocks:
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
+                *[gr.update(interactive=unlocked) for _ in timeline_controls.gated_controls()],
             ]
 
         adult_confirmed.change(
@@ -651,6 +654,7 @@ def build_ui() -> gr.Blocks:
                 generate_plan,
                 generate_video,
                 preview_characters,
+                *timeline_controls.gated_controls(),
             ],
         )
 
