@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 import chat_parser
 import hardware_check
 import library as character_library
+import regeneration_engine
 import timeline
 import training_orchestrator
 import video_assembly
@@ -359,8 +360,8 @@ async def parse_timeline_chat_edit(chat_message: str, timeline_state_json: str, 
         "request": (chat_message or "").strip(),
         "intent": intent,
         "next_steps": [
-            "Phase 3.3 will map this preview to TimelineClip IDs and source time ranges.",
-            "Targeted regeneration/transform jobs will preserve before/after timeline versions.",
+            "Phase 3.3 maps this preview to TimelineClip IDs, source time ranges, and Phase 2 regeneration jobs.",
+            "Use the Apply Targeted Regeneration button to replace only affected timeline clips.",
             "Edited clips must pass the Phase 2 quality gate before replacement.",
         ],
     }
@@ -368,6 +369,17 @@ async def parse_timeline_chat_edit(chat_message: str, timeline_state_json: str, 
     updated_notes = (existing_notes + "\n" + json.dumps(event, sort_keys=True)).strip()
     response = chat_parser.intent_to_markdown(intent)
     return response, updated_notes
+
+
+async def apply_timeline_regeneration(chat_message: str, timeline_state_json: str, timeline_notes: str) -> tuple[str, str, list[list[Any]], str | None, str, str, str]:
+    """Parse and apply a Phase 3.3 targeted regeneration command."""
+
+    return await asyncio.to_thread(
+        regeneration_engine.gradio_apply_regeneration,
+        chat_message,
+        timeline_state_json,
+        timeline_notes,
+    )
 
 
 def training_defaults() -> dict[str, Any]:
@@ -627,22 +639,38 @@ def build_ui() -> gr.Blocks:
                 )
                 timeline_components = timeline.build_timeline_editor(initial_interactive=initial_interactive)
                 gr.Markdown(
-                    "## Phase 3.2 LLM Chat Parser\n"
-                    "Enter natural-language edit requests to preview a structured intent. Ollama is tried first for local parsing, "
-                    "OpenRouter is supported when configured, and deterministic rules keep the UI useful if no LLM is available."
+                    "## Phase 3.2 Parser + Phase 3.3 Targeted Regeneration\n"
+                    "Enter natural-language edit requests to preview a structured intent, then apply targeted regeneration. "
+                    "The Phase 3.3 engine replaces only requested clips/ranges, preserves untouched timeline slots, writes JSON sidecars, "
+                    "uses Phase 2 generate/review/extend/upscale helpers, and keeps 720p low-VRAM defaults before final upscale."
                 )
                 timeline_notes = gr.Textbox(label="Structured edit intents / clip provenance", lines=6)
                 chat_message = gr.Textbox(
                     label="Chat edit request",
-                    placeholder="fix sudden position change between clip 3 and 4",
+                    placeholder="regenerate clip 2 with stronger physics",
                     lines=2,
                 )
-                chat_button = gr.Button("Send Edit Request", interactive=initial_interactive, variant="primary")
-                chat_response = gr.Markdown(label="Parsed intent preview")
+                with gr.Row():
+                    chat_button = gr.Button("Preview Edit Intent", interactive=initial_interactive, variant="secondary")
+                    apply_regeneration_button = gr.Button("Apply Targeted Regeneration", interactive=initial_interactive, variant="primary")
+                chat_response = gr.Markdown(label="Parsed intent / regeneration result")
                 chat_button.click(
                     parse_timeline_chat_edit,
                     inputs=[chat_message, timeline_components["state_json"], timeline_notes],
                     outputs=[chat_response, timeline_notes],
+                )
+                apply_regeneration_button.click(
+                    apply_timeline_regeneration,
+                    inputs=[chat_message, timeline_components["state_json"], timeline_notes],
+                    outputs=[
+                        timeline_components["state_json"],
+                        timeline_components["timeline_html"],
+                        timeline_components["clip_table"],
+                        timeline_components["preview_video"],
+                        timeline_components["status"],
+                        chat_response,
+                        timeline_notes,
+                    ],
                 )
 
         def _gate_update(confirmed: bool) -> list[Any]:
@@ -656,6 +684,8 @@ def build_ui() -> gr.Blocks:
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(selected="Setup" if not unlocked else "Character Library"),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
@@ -685,6 +715,8 @@ def build_ui() -> gr.Blocks:
                 generate_plan,
                 generate_video,
                 preview_characters,
+                chat_button,
+                apply_regeneration_button,
                 *timeline_components["gated_controls"],
             ],
         )
