@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 
 import hardware_check
 import library as character_library
+import timeline
 import training_orchestrator
 import video_assembly
 from hardware_check import report_to_markdown
@@ -600,17 +601,92 @@ def build_ui() -> gr.Blocks:
                     outputs=[plan_output, pipeline_json, final_video_file],
                 )
 
-            with gr.Tab("Timeline", id="Timeline", visible=initial_interactive) as timeline_tab:
+            with gr.Tab("Timeline & Edit", id="Timeline & Edit", visible=initial_interactive) as timeline_tab:
                 gr.Markdown(
-                    "Playable timeline placeholder with edit chat. "
-                    "TODO Phase 2: add clip provenance, reorder/trim/replace metadata, final upscale export, and video pipeline status queues. "
-                    "TODO Phase 3: connect chat edits to VideoJobResult job_id/time ranges, targeted regeneration, timeline version history, and review deltas."
+                    "Build a playable Phase 3.1 edit timeline from generated clips or local videos. "
+                    "The visual rail scrolls horizontally, supports drag reordering in the browser, exposes trim handles in the table, "
+                    "renders moviepy-backed previews into Gradio Video, and saves/loads timeline JSON with clip provenance."
                 )
-                timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=10)
-                chat_message = gr.Textbox(label="Chat edit request", placeholder="Fix this transition or slow the whole scene down.")
-                chat_button = gr.Button("Create placeholder edit intent", interactive=initial_interactive)
-                chat_response = gr.Markdown()
-                chat_button.click(timeline_placeholder, inputs=[chat_message, timeline_notes], outputs=[chat_response, timeline_notes])
+                timeline_state_json = gr.Code(
+                    label="Timeline state JSON",
+                    value=timeline.INITIAL_STATE_JSON,
+                    language="json",
+                    visible=False,
+                )
+                timeline_status = gr.Markdown("Timeline ready. Import clips or load a saved timeline JSON.")
+                with gr.Row():
+                    timeline_uploads = gr.Files(
+                        label="Add video clips",
+                        file_types=["video"],
+                        type="filepath",
+                        scale=2,
+                    )
+                    add_timeline_clips = gr.Button("Add Clips", variant="primary", interactive=initial_interactive, scale=1)
+                    clear_timeline_button = gr.Button("Clear", variant="stop", interactive=initial_interactive, scale=1)
+                timeline_html = gr.HTML(timeline.render_timeline_html(timeline.INITIAL_STATE_JSON), label="Visual timeline")
+                with gr.Accordion("Drag/drop reorder + trim controls", open=True):
+                    gr.Markdown(
+                        "Drag cards in the visual rail to preview ordering. The browser writes the order into the field below; "
+                        "click **Apply visual reorder** to persist it. Use the table for precise order and trim edits."
+                    )
+                    visual_order = gr.Textbox(label="Visual clip order IDs", elem_id="timeline_visual_order")
+                    apply_visual_order = gr.Button("Apply visual reorder", interactive=initial_interactive)
+                    timeline_table = gr.Dataframe(
+                        headers=["Order", "Clip ID", "Title", "Source", "Trim Start", "Trim End", "Source Duration", "Trimmed Duration"],
+                        datatype=["number", "str", "str", "str", "number", "number", "number", "number"],
+                        value=[],
+                        interactive=True,
+                        wrap=True,
+                        label="Clip order and trim handles",
+                    )
+                    apply_timeline_edits = gr.Button("Apply table trims/order", variant="secondary", interactive=initial_interactive)
+                timeline_thumbnails = gr.Gallery(label="Clip thumbnails", columns=5, height=220)
+                with gr.Row():
+                    playhead_seconds = gr.Slider(0, 900, value=0, step=0.1, label="Playhead / scrub position (seconds)", scale=2)
+                    render_preview = gr.Button("Render Playable Preview", variant="primary", interactive=initial_interactive, scale=1)
+                timeline_preview = gr.Video(label="Playable timeline preview", interactive=True)
+                with gr.Row():
+                    load_timeline_file = gr.File(label="Load Timeline JSON", file_types=[".json"], type="filepath")
+                    save_timeline_path = gr.Textbox(label="Save path", value="outputs/timelines/current_timeline.json")
+                with gr.Row():
+                    load_timeline_button = gr.Button("Load Timeline", interactive=initial_interactive)
+                    save_timeline_button = gr.Button("Save Timeline", variant="primary", interactive=initial_interactive)
+                    timeline_json_download = gr.File(label="Saved timeline JSON")
+
+                add_timeline_clips.click(
+                    timeline.import_clips,
+                    inputs=[timeline_uploads, timeline_state_json],
+                    outputs=[timeline_state_json, timeline_html, timeline_table, timeline_thumbnails, timeline_status],
+                )
+                apply_timeline_edits.click(
+                    timeline.apply_table_edits,
+                    inputs=[timeline_table, timeline_state_json],
+                    outputs=[timeline_state_json, timeline_html, timeline_table, timeline_status],
+                )
+                apply_visual_order.click(
+                    timeline.apply_visual_reorder,
+                    inputs=[visual_order, timeline_state_json],
+                    outputs=[timeline_state_json, timeline_html, timeline_table, timeline_status],
+                )
+                render_preview.click(
+                    timeline.render_preview_video,
+                    inputs=[timeline_state_json, playhead_seconds],
+                    outputs=[timeline_preview, timeline_status, timeline_state_json],
+                )
+                save_timeline_button.click(
+                    timeline.save_timeline,
+                    inputs=[timeline_state_json, save_timeline_path],
+                    outputs=[timeline_json_download, timeline_status],
+                )
+                load_timeline_button.click(
+                    timeline.load_timeline,
+                    inputs=load_timeline_file,
+                    outputs=[timeline_state_json, timeline_html, timeline_table, timeline_thumbnails, timeline_status],
+                )
+                clear_timeline_button.click(
+                    timeline.clear_timeline,
+                    outputs=[timeline_state_json, timeline_html, timeline_table, timeline_thumbnails, timeline_preview, timeline_status],
+                )
 
         def _gate_update(confirmed: bool) -> list[Any]:
             unlocked = confirmed or not adult_confirmation_required()
@@ -623,6 +699,13 @@ def build_ui() -> gr.Blocks:
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(selected="Setup" if not unlocked else "Character Library"),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
@@ -651,6 +734,13 @@ def build_ui() -> gr.Blocks:
                 generate_plan,
                 generate_video,
                 preview_characters,
+                add_timeline_clips,
+                clear_timeline_button,
+                apply_visual_order,
+                apply_timeline_edits,
+                render_preview,
+                load_timeline_button,
+                save_timeline_button,
             ],
         )
 
