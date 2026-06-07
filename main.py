@@ -282,7 +282,7 @@ def build_generation_plan(
             "enable stronger FP8/GGUF/INT8 quantization",
             "offer RunPod offload with explicit user confirmation",
         ],
-        "todo_phase3": "Timeline + Chat Editing will consume clip manifests for targeted regeneration.",
+        "phase3_todos": video_assembly.PHASE3_TODOS,
     }
     return "```json\n" + json.dumps(plan, indent=2) + "\n```"
 
@@ -545,7 +545,7 @@ def build_ui() -> gr.Blocks:
                     "Create 5–10 second clips at 720p, auto-review with Florence-2, smart-loop to longer segments, "
                     "and upscale using SeedVR 2.5 / RTX Video SR / Nomos2. The selected ids should come from the Character Library tab; "
                     "`library.load_for_scene()` will add the locked fixed male when available and load every partner LoRA on top of the General Physics Base LoRA. "
-                    "TODO Phase 3: Timeline + Chat Editing will consume these manifests for targeted regeneration."
+                    "Phase 3 TODOs: import VideoJobResult sidecars into Timeline, route chat edits to job_id/time ranges, and version replacement clips."
                 )
                 scene_prompt = gr.Textbox(label="Scene prompt", lines=5)
                 selected_partners = gr.Textbox(label="Selected library character IDs from Character Library", placeholder="partner_0001, partner_0002")
@@ -572,7 +572,7 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(
                     "Playable timeline placeholder with edit chat. "
                     "TODO Phase 2: add clip provenance, reorder/trim/replace metadata, final upscale export, and video pipeline status queues. "
-                    "TODO Phase 3: connect chat edits to targeted regeneration and timeline version history."
+                    "TODO Phase 3: connect chat edits to VideoJobResult job_id/time ranges, targeted regeneration, timeline version history, and review deltas."
                 )
                 timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=10)
                 chat_message = gr.Textbox(label="Chat edit request", placeholder="Fix this transition or slow the whole scene down.")

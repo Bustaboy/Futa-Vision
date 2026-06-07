@@ -33,12 +33,11 @@ def _low_vram() -> dict[str, object]:
 
 
 @pytest.fixture(autouse=True)
-def deterministic_low_vram(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Avoid real hardware probing and keep final artifacts inside tmp_path."""
+def deterministic_low_vram(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Avoid real hardware probing in Phase 2 tests."""
 
     monkeypatch.setattr(video_assembly.hardware_check, "get_low_vram_settings", _low_vram)
     monkeypatch.setattr(library.hardware_check, "get_low_vram_settings", _low_vram)
-    monkeypatch.setattr(video_assembly, "DEFAULT_FINAL_DIR", tmp_path / "outputs" / "final_videos")
 
 
 @pytest.fixture()
@@ -77,8 +76,12 @@ def character_db(tmp_path: Path) -> Path:
     return db_path
 
 
-def test_generate_short_clip_loads_fixed_male_base_and_partner_loras(tmp_path: Path, character_db: Path) -> None:
-    """Short clip generation should create a 720p ComfyUI-ready manifest."""
+def _sidecar(result: video_assembly.VideoJobResult) -> dict[str, object]:
+    return json.loads(Path(result.sidecar_path).read_text())
+
+
+def test_generate_short_clip_writes_video_job_result_sidecar_with_required_loras(tmp_path: Path, character_db: Path) -> None:
+    """Short clip generation should create a 720p VideoJobResult sidecar."""
 
     clip = video_assembly.generate_short_clip(
         {
@@ -91,18 +94,40 @@ def test_generate_short_clip_loads_fixed_male_base_and_partner_loras(tmp_path: P
         duration=8,
     )
 
-    assert Path(clip.clip_path).exists()
+    assert Path(clip.artifact_path).exists()
     assert clip.pipeline == "wan"
     assert clip.resolution == "1280x720"
-    manifest = json.loads(Path(clip.manifest_path).read_text())
-    loras = manifest["scene_load_plan"]["loras"]
+    sidecar = _sidecar(clip)
+    assert sidecar["schema_version"] == video_assembly.SIDECAR_SCHEMA_VERSION
+    assert sidecar["stage"] == "generate_short_clip"
+    assert sidecar["artifact_path"] == clip.artifact_path
+    assert Path(clip.artifact_path).read_text().startswith("Futa-Vision Phase 2 placeholder")
+    loras = sidecar["payload"]["scene_load_plan"]["loras"]
     assert loras[0]["role"] == "general_physics_base"
     assert {item.get("id") for item in loras} >= {"male_locked_active", "partner_a", "partner_b"}
-    assert manifest["conditioning"]["partner_loras_required_on_top"] is True
-    assert "MotionDirector" in manifest["conditioning"]["motion_consistency"]
+    assert sidecar["payload"]["conditioning"]["partner_loras_required_on_top"] is True
+    assert "MotionDirector" in sidecar["payload"]["conditioning"]["motion_consistency"]
+    assert video_assembly.validate_video_sidecar(clip.sidecar_path, expected_stage="generate_short_clip") == []
 
 
-def test_auto_review_rejects_below_threshold_and_records_reason(tmp_path: Path, character_db: Path) -> None:
+def test_manifest_validation_flags_corrupt_generation_sidecar(tmp_path: Path, character_db: Path) -> None:
+    """Manifest validation should catch PR #13-style missing required LoRAs."""
+
+    clip = video_assembly.generate_short_clip(
+        {"selected_character_ids": "partner_a", "db_path": character_db, "output_dir": tmp_path / "outputs"}
+    )
+    sidecar_path = Path(clip.sidecar_path)
+    sidecar = json.loads(sidecar_path.read_text())
+    sidecar["payload"]["scene_load_plan"]["loras"] = []
+    sidecar_path.write_text(json.dumps(sidecar, indent=2))
+
+    errors = video_assembly.validate_video_sidecar(sidecar_path, expected_stage="generate_short_clip")
+
+    assert any("General Physics Base LoRA" in error for error in errors)
+    assert any("character LoRAs" in error for error in errors)
+
+
+def test_auto_review_rejects_below_threshold_and_records_enveloped_reason(tmp_path: Path, character_db: Path) -> None:
     """Florence-2 placeholder gate should reject clips below the 80% threshold."""
 
     clip = video_assembly.generate_short_clip(
@@ -114,34 +139,41 @@ def test_auto_review_rejects_below_threshold_and_records_reason(tmp_path: Path, 
         }
     )
 
-    review = video_assembly.auto_review(clip.clip_path)
+    review = video_assembly.auto_review(clip.artifact_path)
 
-    assert review.approved is False
-    assert review.score == 74.33
-    assert "Rejected below 80" in review.reason
-    rejected_reason = Path(clip.clip_path).parent.parent / "rejected_clips" / f"{Path(clip.clip_path).name}.reason.txt"
+    assert review.status == "rejected"
+    assert review.payload["approved"] is False
+    assert review.payload["score"] == 74.33
+    assert "Rejected below 80" in review.payload["reason"]
+    rejected_reason = Path(review.payload["reason_path"])
     assert rejected_reason.exists()
+    sidecar = _sidecar(review)
+    assert sidecar["stage"] == "auto_review"
+    assert sidecar["payload"]["discard_policy"] == "discard/regenerate below 80 before extension or upscale"
+    assert video_assembly.validate_video_sidecar(review.sidecar_path, expected_stage="auto_review") == []
 
 
-def test_smart_loop_extension_uses_anchor_keyframes_and_overlap(tmp_path: Path, character_db: Path) -> None:
+def test_smart_loop_extension_uses_anchor_keyframes_overlap_and_valid_sidecar(tmp_path: Path, character_db: Path) -> None:
     """Smart looping should write extender metadata with first-last frame matching."""
 
     clip = video_assembly.generate_short_clip(
         {"selected_character_ids": "partner_a", "db_path": character_db, "output_dir": tmp_path / "outputs"},
         duration=6,
     )
-    extended = video_assembly.smart_loop_extension(clip.clip_path, target_duration=24)
+    extended = video_assembly.smart_loop_extension(clip.artifact_path, target_duration=24)
 
-    assert Path(extended.clip_path).exists()
+    assert Path(extended.artifact_path).exists()
     assert extended.duration_seconds == 24
-    manifest = json.loads(Path(extended.manifest_path).read_text())
-    assert manifest["looping"]["anchor_keyframes"] is True
-    assert manifest["looping"]["first_last_frame_alignment"] is True
-    assert manifest["looping"]["overlap_frames"] == 15
-    assert "Wan-video-extender v2.0" in manifest["extension_stack"]
+    sidecar = _sidecar(extended)
+    assert sidecar["stage"] == "smart_loop_extension"
+    assert sidecar["payload"]["looping"]["anchor_keyframes"] is True
+    assert sidecar["payload"]["looping"]["first_last_frame_alignment"] is True
+    assert sidecar["payload"]["looping"]["overlap_frames"] == 15
+    assert "Wan-video-extender v2.0" in sidecar["payload"]["extension_stack"]
+    assert video_assembly.validate_video_sidecar(extended.sidecar_path, expected_stage="smart_loop_extension") == []
 
 
-def test_final_upscale_uses_seedvr_rtx_and_nomos(tmp_path: Path, character_db: Path) -> None:
+def test_final_upscale_uses_seedvr_rtx_nomos_and_preserves_input_sidecars(tmp_path: Path, character_db: Path) -> None:
     """Final upscale should preserve temporal consistency metadata."""
 
     clip = video_assembly.generate_short_clip(
@@ -149,13 +181,16 @@ def test_final_upscale_uses_seedvr_rtx_and_nomos(tmp_path: Path, character_db: P
     )
     final = video_assembly.final_upscale([clip])
 
-    assert Path(final["final_video_path"]).exists()
-    assert final["temporal_consistency"] is True
-    assert final["upscale_stack"] == ["SeedVR 2.5", "RTX Video SR", "Nomos2"]
+    assert Path(final.artifact_path).exists()
+    assert final.payload["temporal_consistency"] is True
+    assert final.payload["upscale_stack"] == ["SeedVR 2.5", "RTX Video SR", "Nomos2"]
+    assert final.payload["input_sidecars"] == [clip.sidecar_path]
+    assert str(tmp_path / "outputs" / "final_videos") in final.artifact_path
+    assert video_assembly.validate_video_sidecar(final.sidecar_path, expected_stage="final_upscale") == []
 
 
-def test_build_video_pipeline_chains_review_extension_and_upscale(tmp_path: Path, character_db: Path) -> None:
-    """The high-level orchestrator should return complete clip, review, extension, and final payloads."""
+def test_build_video_pipeline_chains_enveloped_stage_results(tmp_path: Path, character_db: Path) -> None:
+    """The high-level orchestrator should return complete stage envelopes."""
 
     result = video_assembly.build_video_pipeline(
         {
@@ -171,13 +206,19 @@ def test_build_video_pipeline_chains_review_extension_and_upscale(tmp_path: Path
 
     payload = asdict(result)
     assert payload["status"] == "complete"
-    assert payload["review"]["approved"] is True
-    assert payload["extended_clip"]["duration_seconds"] == 20
-    assert Path(payload["final_video"]["final_video_path"]).exists()
-    assert "TODO Phase 3" in payload["todo_phase3"]
+    assert payload["review"]["payload"]["approved"] is True
+    assert payload["extended_clip"]["payload"]["duration_seconds"] == 20
+    assert Path(payload["final_video"]["payload"]["final_video_path"]).exists()
+    assert [stage["stage"] for stage in payload["stage_results"]] == [
+        "generate_short_clip",
+        "auto_review",
+        "smart_loop_extension",
+        "final_upscale",
+    ]
+    assert all("TODO Phase 3" in todo for todo in payload["phase3_todos"])
 
 
-def test_build_video_pipeline_retries_lower_resolution_after_oom(tmp_path: Path, character_db: Path) -> None:
+def test_build_video_pipeline_retries_lower_resolution_after_local_oom(tmp_path: Path, character_db: Path) -> None:
     """Local OOM should fall back gracefully to a lower local resolution."""
 
     result = video_assembly.build_video_pipeline(
@@ -193,4 +234,28 @@ def test_build_video_pipeline_retries_lower_resolution_after_oom(tmp_path: Path,
 
     assert result.status == "complete"
     assert result.fallbacks_used == ["lower_resolution"]
-    assert result.clip["resolution"] == video_assembly.LOWER_FALLBACK_RESOLUTION
+    assert result.clip["payload"]["resolution"] == video_assembly.LOWER_FALLBACK_RESOLUTION
+    assert result.clip["payload"]["fallback_policy"]["oom_local_retry_resolution"] == "960x540"
+    assert video_assembly.validate_video_sidecar(result.clip["sidecar_path"], expected_stage="generate_short_clip") == []
+
+
+def test_build_video_pipeline_retries_runpod_after_oom_when_user_allows_cloud(tmp_path: Path, character_db: Path) -> None:
+    """RunPod fallback should be represented explicitly when cloud fallback is enabled."""
+
+    result = video_assembly.build_video_pipeline(
+        {
+            "selected_character_ids": "partner_a",
+            "db_path": character_db,
+            "output_dir": tmp_path / "outputs",
+            "simulate_oom": True,
+            "use_runpod": True,
+            "duration_seconds": 8,
+            "target_duration": 20,
+        }
+    )
+
+    assert result.status == "complete"
+    assert result.fallbacks_used == ["runpod"]
+    assert result.clip["payload"]["fallback_policy"]["cloud_provider"] == "RunPod"
+    assert result.clip["payload"]["fallback_policy"]["cloud_requires_explicit_user_confirmation"] is True
+    assert result.clip["payload"]["resolution"] == "1280x720"
