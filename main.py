@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 import hardware_check
 import library as character_library
 import training_orchestrator
+import video_assembly
 from hardware_check import report_to_markdown
 from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, score_partner_candidate, weighted_score
 
@@ -260,27 +261,54 @@ def build_generation_plan(
     duration_seconds: int,
     use_runpod: bool,
 ) -> str:
-    """Create a dry-run plan for clip generation before ComfyUI integration exists."""
+    """Create a hardware-aware Phase 2 preview plan without launching generation."""
 
-    mode = "RunPod cloud offload" if use_runpod else "local_low_vram"
+    settings = hardware_check.get_low_vram_settings()
+    mode = "RunPod cloud offload" if use_runpod else settings["mode"]
+    normalized_pipeline = "wan" if pipeline.lower().startswith("wan") else "ltx"
     plan = {
         "mode": mode,
-        "resolution": "1280x720 (720p) local default; final upscale with SeedVR 2.5 / RTX Video SR / Nomos2 after assembly",
+        "resolution": f"{settings.get('resolution', '1280x720')} local default; final upscale with SeedVR 2.5 / RTX Video SR / Nomos2 after assembly",
         "clip_duration_seconds": min(max(duration_seconds, 5), 10),
-        "target_pipeline": pipeline,
-        "selected_partners": selected_partners,
+        "target_pipeline": normalized_pipeline,
+        "pipeline_reason": "Wan for physics" if normalized_pipeline == "wan" else "LTX for speed",
+        "selected_character_ids": selected_partners,
         "scene_prompt": scene_prompt,
-        "quality_gate": "discard/regenerate below auto-review score 80",
+        "quality_gate": "Florence-2 auto-review discards/regenerates below score 80",
+        "required_loras": "General Physics Base LoRA first, then fixed male + every selected partner LoRA",
+        "consistency_modules": ["MotionDirector", "IP-Adapter FaceID", "Phantom"],
         "fallbacks": [
-            "reduce batch size",
-            "reduce preview resolution",
-            "enable stronger quantization",
-            "switch preview/final pipeline",
-            "offer RunPod offload",
+            "retry at 960x540 on local OOM",
+            "enable stronger FP8/GGUF/INT8 quantization",
+            "offer RunPod offload with explicit user confirmation",
         ],
-        "todo_next": "Phase 2: replace this dry-run plan with ComfyUI workflow submission and clip auto-review.",
+        "todo_phase3": "Timeline + Chat Editing will consume clip manifests for targeted regeneration.",
     }
     return "```json\n" + json.dumps(plan, indent=2) + "\n```"
+
+
+def run_video_generation_pipeline(
+    scene_prompt: str,
+    selected_character_ids: str,
+    scene_type: str,
+    pipeline: str,
+    duration_seconds: int,
+    target_duration: int,
+    use_runpod: bool,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[str, str, str | None]:
+    """Launch the Phase 2 video assembly orchestrator from Gradio."""
+
+    return video_assembly.gradio_build_video_pipeline(
+        scene_prompt=scene_prompt,
+        selected_character_ids=selected_character_ids,
+        scene_type=scene_type,
+        pipeline=pipeline,
+        duration_seconds=duration_seconds,
+        target_duration=target_duration,
+        use_runpod=use_runpod,
+        progress=progress,
+    )
 
 
 def timeline_placeholder(chat_message: str, timeline_notes: str) -> tuple[str, str]:
@@ -386,7 +414,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 1: full SQLite Character Library + enhanced scoring integration."
+            "Phase 2: video generation pipeline with 720p smart looping and final upscale."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
@@ -514,17 +542,31 @@ def build_ui() -> gr.Blocks:
 
             with gr.Tab("Generate Video", id="Generate Video", visible=initial_interactive) as generate_tab:
                 gr.Markdown(
-                    "Create short 5–10 second clips at 720p, auto-review, extend, and send accepted clips to the timeline. "
-                    "TODO Phase 2: submit real ComfyUI Wan/LTX workflows, sample frames for auto-review, quarantine clips below 80, and preserve character library provenance."
+                    "Create 5–10 second clips at 720p, auto-review with Florence-2, smart-loop to longer segments, "
+                    "and upscale using SeedVR 2.5 / RTX Video SR / Nomos2. The selected ids should come from the Character Library tab; "
+                    "`library.load_for_scene()` will add the locked fixed male when available and load every partner LoRA on top of the General Physics Base LoRA. "
+                    "TODO Phase 3: Timeline + Chat Editing will consume these manifests for targeted regeneration."
                 )
                 scene_prompt = gr.Textbox(label="Scene prompt", lines=5)
-                selected_partners = gr.Textbox(label="Selected library character IDs", placeholder="partner_0001, partner_0002")
-                pipeline = gr.Radio(["ltx-2.3-preview", "wan-2.7-physics"], value="ltx-2.3-preview", label="Pipeline")
-                duration = gr.Slider(5, 10, value=5, step=1, label="Clip duration seconds")
-                use_runpod = gr.Checkbox(label="Offload this job to RunPod", value=False)
-                generate_plan = gr.Button("Build dry-run generation plan", variant="primary", interactive=initial_interactive)
+                selected_partners = gr.Textbox(label="Selected library character IDs from Character Library", placeholder="partner_0001, partner_0002")
+                scene_type = gr.Radio(["single", "threesome", "gangbang"], value="single", label="Scene layout")
+                pipeline = gr.Radio(["LTX for speed", "Wan for physics"], value="LTX for speed", label="Pipeline selector")
+                with gr.Row():
+                    duration = gr.Slider(5, 10, value=8, step=1, label="Short clip duration seconds")
+                    target_duration = gr.Slider(10, 60, value=20, step=1, label="Smart-loop target seconds")
+                use_runpod = gr.Checkbox(label="Allow RunPod cloud fallback/offload for OOM", value=False)
+                with gr.Row():
+                    generate_plan = gr.Button("Build generation plan", variant="secondary", interactive=initial_interactive)
+                    generate_video = gr.Button("Generate Video", variant="primary", interactive=initial_interactive)
                 plan_output = gr.Markdown()
+                pipeline_json = gr.Code(label="Pipeline result / manifest", language="json")
+                final_video_file = gr.File(label="Final upscaled video placeholder")
                 generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, use_runpod], outputs=plan_output)
+                generate_video.click(
+                    run_video_generation_pipeline,
+                    inputs=[scene_prompt, selected_partners, scene_type, pipeline, duration, target_duration, use_runpod],
+                    outputs=[plan_output, pipeline_json, final_video_file],
+                )
 
             with gr.Tab("Timeline", id="Timeline", visible=initial_interactive) as timeline_tab:
                 gr.Markdown(
@@ -554,6 +596,7 @@ def build_ui() -> gr.Blocks:
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
             ]
 
         adult_confirmed.change(
@@ -573,6 +616,7 @@ def build_ui() -> gr.Blocks:
                 create_partner_shortcut,
                 score_button,
                 generate_plan,
+                generate_video,
             ],
         )
 
