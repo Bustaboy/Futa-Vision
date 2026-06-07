@@ -3,7 +3,7 @@
 The library is intentionally local-first: all character metadata, thumbnail
 cache paths, reference-sheet paths, tags, version history, and scene-loading
 payloads live under the configured library directory unless a caller explicitly
-passes another database path.  Phase 1 stores enough metadata for fixed male and
+passes another database path. Phase 1 stores enough metadata for fixed male and
 partner LoRAs while leaving the heavy ComfyUI/Regional ControlNet execution to
 Phase 2.
 """
@@ -20,21 +20,40 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+import importlib
+import importlib.util
+
 import hardware_check
 
-try:
-    from PIL import Image, ImageDraw
-except ImportError:  # pragma: no cover - requirements include Pillow.
-    Image = None  # type: ignore[assignment]
-    ImageDraw = None  # type: ignore[assignment]
+_PIL_AVAILABLE = importlib.util.find_spec("PIL") is not None
+if _PIL_AVAILABLE:
+    Image = importlib.import_module("PIL.Image")
+    ImageDraw = importlib.import_module("PIL.ImageDraw")
+    UnidentifiedImageError = importlib.import_module("PIL").UnidentifiedImageError
+else:  # pragma: no cover - exercised in minimal environments without optional deps.
+    Image = None
+    ImageDraw = None
+    UnidentifiedImageError = OSError
 
 DEFAULT_LIBRARY_DIR = Path("library")
 DEFAULT_DB_PATH = DEFAULT_LIBRARY_DIR / "indexes" / "characters.sqlite3"
 DEFAULT_THUMBNAIL_DIR = DEFAULT_LIBRARY_DIR / "thumbnails"
+DEFAULT_CHARACTER_DATASET_DIR = Path("datasets/characters")
 GENERAL_PHYSICS_BASE_LORA = Path("general_physics_lora/general_physics_v1.0.safetensors")
 SCHEMA_VERSION = 1
 CHARACTER_TYPES = {"partner", "fixed_male"}
 THUMBNAIL_SIZE = (256, 256)
+SUPPORTED_REFERENCE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+MINIMAL_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+    b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00"
+    b"\x00\x0cIDAT\x08\xd7c````\x00\x00\x00\x05\x00\x01"
+    b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+MAX_TAG_LENGTH = 48
+MAX_TRIGGER_WORD_LENGTH = 80
+TAG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
+TRIGGER_WORD_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 
 
 @dataclass(slots=True)
@@ -71,6 +90,19 @@ class SceneLoadPlan:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class ReferenceDataset:
+    """Prepared per-character reference dataset manifest for future Ostris jobs."""
+
+    character_id: str
+    dataset_dir: str
+    images: list[str]
+    captions: list[str]
+    manifest_path: str
+    trigger_word: str
+    created_at: str
+
+
 def _utc_now() -> str:
     """Return a stable UTC timestamp without microseconds."""
 
@@ -84,30 +116,105 @@ def _slug(value: str) -> str:
     return clean or "character"
 
 
+def normalize_string_list(values: Sequence[str] | str | None) -> list[str]:
+    """Normalize JSON, comma-separated text, or sequences into unique strings.
+
+    The helper is intentionally tolerant because Gradio components may pass
+    comma-separated text, JSON arrays, or native lists depending on the UI path.
+    Order is preserved while duplicate empty values are removed.
+    """
+
+    if values is None:
+        raw_items: list[Any] = []
+    elif isinstance(values, str):
+        stripped = values.strip()
+        if not stripped:
+            raw_items = []
+        elif stripped.startswith("["):
+            try:
+                loaded = json.loads(stripped)
+            except json.JSONDecodeError:
+                raw_items = stripped.split(",")
+            else:
+                raw_items = loaded if isinstance(loaded, list) else []
+        else:
+            raw_items = stripped.split(",")
+    else:
+        raw_items = list(values)
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        clean = str(item).strip()
+        if not clean or clean in seen:
+            continue
+        normalized.append(clean)
+        seen.add(clean)
+    return normalized
+
+
+def sanitize_trigger_word(trigger_word: str) -> str:
+    """Validate and normalize a LoRA trigger word for prompt-safe reuse."""
+
+    clean = trigger_word.strip().replace(" ", "_")
+    if not clean:
+        raise ValueError("Trigger word is required.")
+    if len(clean) > MAX_TRIGGER_WORD_LENGTH or not TRIGGER_WORD_PATTERN.fullmatch(clean):
+        raise ValueError(
+            "Trigger word must start with a letter/number and contain only letters, numbers, underscores, or hyphens."
+        )
+    return clean
+
+
+def sanitize_tags(tags: Sequence[str] | str | None) -> list[str]:
+    """Normalize tags to lowercase slugs and reject unsafe tag values."""
+
+    sanitized: list[str] = []
+    for tag in normalize_string_list(tags):
+        clean = tag.strip().lower().replace("_", "-")
+        if not clean:
+            continue
+        if len(clean) > MAX_TAG_LENGTH or not TAG_PATTERN.fullmatch(clean):
+            raise ValueError(
+                f"Invalid tag `{tag}`. Tags must be lowercase letters/numbers with optional hyphens or underscores."
+            )
+        if clean not in sanitized:
+            sanitized.append(clean)
+    return sorted(sanitized)
+
+
+def normalize_reference_sheet_images(
+    reference_sheet_images: Sequence[str] | str | None,
+    *,
+    require_exists: bool = False,
+) -> list[str]:
+    """Normalize reference image paths and validate supported image extensions."""
+
+    normalized: list[str] = []
+    for image in normalize_string_list(reference_sheet_images):
+        path = Path(image).expanduser()
+        if path.suffix.lower() not in SUPPORTED_REFERENCE_IMAGE_EXTENSIONS:
+            raise ValueError(
+                f"Unsupported reference image extension for `{image}`. Supported: {sorted(SUPPORTED_REFERENCE_IMAGE_EXTENSIONS)}"
+            )
+        if require_exists and not path.exists():
+            raise FileNotFoundError(f"Reference image does not exist: {path}")
+        value = str(path)
+        if value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
 def _json_list(values: Sequence[str] | str | None) -> str:
     """Encode string collections as JSON while accepting comma-separated UI text."""
 
-    if values is None:
-        items: list[str] = []
-    elif isinstance(values, str):
-        items = [item.strip() for item in values.split(",") if item.strip()]
-    else:
-        items = [str(item).strip() for item in values if str(item).strip()]
-    return json.dumps(items, ensure_ascii=False)
+    return json.dumps(normalize_string_list(values), ensure_ascii=False)
 
 
 def _decode_list(value: str | None) -> list[str]:
     """Decode a JSON list from SQLite; tolerate legacy empty values."""
 
-    if not value:
-        return []
-    try:
-        loaded = json.loads(value)
-    except json.JSONDecodeError:
-        return [item.strip() for item in value.split(",") if item.strip()]
-    if not isinstance(loaded, list):
-        return []
-    return [str(item) for item in loaded]
+    return normalize_string_list(value)
 
 
 def _connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -156,6 +263,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_characters_type ON characters(character_type)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_characters_created ON characters(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_characters_name ON characters(name)")
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)",
         (str(SCHEMA_VERSION),),
@@ -203,12 +311,77 @@ def _character_id(name: str, character_type: str, explicit_id: str | None = None
     return f"{prefix}_{_slug(name)}_{digest}"
 
 
+def _thumbnail_meta_path(thumbnail_path: Path) -> Path:
+    """Return the sidecar metadata path for a cached thumbnail."""
+
+    return thumbnail_path.with_suffix(thumbnail_path.suffix + ".json")
+
+
+def _reference_signature(reference_sheet_images: Sequence[str] | None) -> str:
+    """Hash source paths, mtimes, and sizes so thumbnail cache reuse is safe."""
+
+    payload: list[dict[str, Any]] = []
+    for image in reference_sheet_images or []:
+        path = Path(image)
+        if not path.exists() or not path.is_file():
+            payload.append({"path": str(path), "missing": True})
+            continue
+        stat = path.stat()
+        payload.append(
+            {
+                "path": str(path.resolve()),
+                "mtime_ns": stat.st_mtime_ns,
+                "size": stat.st_size,
+            }
+        )
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _thumbnail_cache_valid(
+    thumbnail_path: Path,
+    character_id: str,
+    signature: str,
+) -> bool:
+    """Return whether a cached thumbnail and metadata sidecar can be reused."""
+
+    meta_path = _thumbnail_meta_path(thumbnail_path)
+    if not thumbnail_path.exists() or not meta_path.exists():
+        return False
+    try:
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        metadata.get("character_id") == character_id
+        and metadata.get("signature") == signature
+        and metadata.get("thumbnail_size") == list(THUMBNAIL_SIZE)
+    )
+
+
+def _write_thumbnail_metadata(
+    thumbnail_path: Path,
+    character_id: str,
+    signature: str,
+    source: str,
+) -> None:
+    """Persist a thumbnail cache sidecar for deterministic reuse."""
+
+    metadata = {
+        "character_id": character_id,
+        "signature": signature,
+        "source": source,
+        "thumbnail_size": list(THUMBNAIL_SIZE),
+        "updated_at": _utc_now(),
+    }
+    _thumbnail_meta_path(thumbnail_path).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+
 def _placeholder_thumbnail(character_id: str, name: str, character_type: str, target: Path) -> Path:
     """Create a small cached placeholder thumbnail when no reference image exists."""
 
     target.parent.mkdir(parents=True, exist_ok=True)
     if Image is None or ImageDraw is None:
-        target.write_bytes(b"")
+        target.write_bytes(MINIMAL_PNG_BYTES)
         return target
 
     color = (74, 111, 165) if character_type == "fixed_male" else (137, 84, 156)
@@ -228,6 +401,8 @@ def generate_thumbnail(
     character_type: str,
     reference_sheet_images: Sequence[str] | None = None,
     thumbnail_dir: str | Path = DEFAULT_THUMBNAIL_DIR,
+    *,
+    force: bool = False,
 ) -> str:
     """Generate or refresh a cached thumbnail and return its path.
 
@@ -237,32 +412,85 @@ def generate_thumbnail(
     """
 
     hardware_check.get_low_vram_settings()
-    target = Path(thumbnail_dir) / f"{character_id}.png"
+    safe_id = _slug(character_id)
+    target = Path(thumbnail_dir) / f"{safe_id}.png"
     sources = [Path(item) for item in (reference_sheet_images or []) if item]
+    signature = _reference_signature([str(source) for source in sources])
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    if Image is None:
-        if sources and sources[0].exists():
-            shutil.copy2(sources[0], target)
-        else:
-            target.write_bytes(b"")
+    if not force and _thumbnail_cache_valid(target, safe_id, signature):
         return str(target)
 
-    for source in sources:
-        if not source.exists() or not source.is_file():
-            continue
-        try:
-            with Image.open(source) as img:
-                img.thumbnail(THUMBNAIL_SIZE)
-                canvas = Image.new("RGB", THUMBNAIL_SIZE, (18, 18, 24))
-                offset = ((THUMBNAIL_SIZE[0] - img.width) // 2, (THUMBNAIL_SIZE[1] - img.height) // 2)
-                canvas.paste(img.convert("RGB"), offset)
-                canvas.save(target)
-            return str(target)
-        except OSError:
-            continue
+    if Image is not None:
+        for source in sources:
+            if not source.exists() or not source.is_file():
+                continue
+            try:
+                with Image.open(source) as img:
+                    img.thumbnail(THUMBNAIL_SIZE)
+                    canvas = Image.new("RGB", THUMBNAIL_SIZE, (18, 18, 24))
+                    offset = (
+                        (THUMBNAIL_SIZE[0] - img.width) // 2,
+                        (THUMBNAIL_SIZE[1] - img.height) // 2,
+                    )
+                    canvas.paste(img.convert("RGB"), offset)
+                    canvas.save(target)
+                _write_thumbnail_metadata(target, safe_id, signature, str(source))
+                return str(target)
+            except (OSError, UnidentifiedImageError):
+                continue
 
-    return str(_placeholder_thumbnail(character_id, name, character_type, target))
+    _placeholder_thumbnail(safe_id, name, character_type, target)
+    _write_thumbnail_metadata(target, safe_id, signature, "placeholder")
+    return str(target)
+
+
+def prepare_reference_dataset(
+    character_id: str,
+    trigger_word: str,
+    reference_sheet_images: Sequence[str] | str | None,
+    dataset_dir: str | Path = DEFAULT_CHARACTER_DATASET_DIR,
+) -> ReferenceDataset:
+    """Copy valid reference images into a stable dataset folder with captions.
+
+    This prepares Phase 1 library references for the future real Ostris partner
+    training path while remaining deterministic and local. Missing/unsupported
+    paths raise clear errors because approved character datasets should never be
+    silently incomplete.
+    """
+
+    safe_id = _slug(character_id)
+    trigger = sanitize_trigger_word(trigger_word)
+    refs = normalize_reference_sheet_images(reference_sheet_images, require_exists=True)
+    if not refs:
+        raise ValueError("At least one reference image is required to prepare a character dataset.")
+
+    target_dir = Path(dataset_dir) / safe_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    copied_images: list[str] = []
+    captions: list[str] = []
+    for index, ref in enumerate(refs, start=1):
+        source = Path(ref)
+        target = target_dir / f"reference_{index:02d}{source.suffix.lower()}"
+        shutil.copy2(source, target)
+        caption = target.with_suffix(".txt")
+        caption.write_text(f"{trigger}\n", encoding="utf-8")
+        copied_images.append(str(target))
+        captions.append(str(caption))
+
+    created_at = _utc_now()
+    manifest_path = target_dir / "dataset_manifest.json"
+    manifest = ReferenceDataset(
+        character_id=safe_id,
+        dataset_dir=str(target_dir),
+        images=copied_images,
+        captions=captions,
+        manifest_path=str(manifest_path),
+        trigger_word=trigger,
+        created_at=created_at,
+    )
+    manifest_path.write_text(json.dumps(asdict(manifest), indent=2), encoding="utf-8")
+    return manifest
 
 
 def add_character(
@@ -286,7 +514,7 @@ def add_character(
 
     Fixed male entries are deliberately hard to overwrite: callers must pass both
     ``overwrite=True`` and ``allow_fixed_male_overwrite=True`` when replacing an
-    existing fixed male row.  Partner rows can be versioned by inserting a new id
+    existing fixed male row. Partner rows can be versioned by inserting a new id
     or explicitly overwritten by id.
     """
 
@@ -297,11 +525,10 @@ def add_character(
         raise ValueError("Character name is required.")
     if not lora_path.strip():
         raise ValueError("LoRA path is required.")
-    if not trigger_word.strip():
-        raise ValueError("Trigger word is required.")
 
-    refs = _decode_list(_json_list(reference_sheet_images))
-    tag_list = sorted(set(_decode_list(_json_list(tags))))
+    trigger = sanitize_trigger_word(trigger_word)
+    refs = normalize_reference_sheet_images(reference_sheet_images)
+    tag_list = sanitize_tags(tags)
     cid = _character_id(name, character_type, character_id)
     now = _utc_now()
     thumbnail_path = generate_thumbnail(cid, name, character_type, refs)
@@ -356,7 +583,7 @@ def add_character(
                 name.strip(),
                 character_type,
                 str(Path(lora_path)),
-                trigger_word.strip(),
+                trigger,
                 json.dumps(refs),
                 json.dumps(tag_list),
                 created_at,
@@ -390,11 +617,13 @@ def search_library(
 ) -> list[Character]:
     """Search character name/id/trigger/tags with optional type and tag filters."""
 
-    requested_tags = {item.lower() for item in _decode_list(_json_list(tags))}
+    requested_tags = {item.lower() for item in sanitize_tags(tags)}
     needle = query.strip().lower()
     params: list[Any] = []
     where = []
     if character_type and character_type != "all":
+        if character_type not in CHARACTER_TYPES:
+            raise ValueError(f"character_type must be one of 'all' or {sorted(CHARACTER_TYPES)}")
         where.append("character_type = ?")
         params.append(character_type)
     if needle:
@@ -422,12 +651,12 @@ def load_for_scene(
     """Build a single/multi-character LoRA loading plan with regional prompts.
 
     Phase 1 does not launch ComfyUI; it returns a payload that Phase 2 can map to
-    Regional ControlNets, LayerDiffuse masks, and the video pipeline.  Every
+    Regional ControlNets, LayerDiffuse masks, and the video pipeline. Every
     character is loaded on top of the General Physics Base LoRA and keeps the
     default 720p resolution philosophy for 8 GB GPUs.
     """
 
-    ids = [character_ids] if isinstance(character_ids, str) else list(character_ids)
+    ids = normalize_string_list(character_ids)
     ids = [_slug(item) for item in ids if str(item).strip()]
     if not ids:
         raise ValueError("At least one character id is required for a scene.")
@@ -469,11 +698,18 @@ def load_for_scene(
         regional_prompts.append(
             {
                 "character_id": character.id,
+                "character_type": character.character_type,
                 "trigger_word": character.trigger_word,
+                "tags": character.tags,
                 "region_index": index,
                 "region_hint": "full_frame" if total == 1 else f"character_region_{index + 1}_of_{total}",
-                "controlnet": "regional_controlnet_phase2_todo",
+                "region_weight": round(1.0 / total, 3),
+                "controlnet": {
+                    "type": "regional_controlnet_phase2_todo",
+                    "enabled": total > 1,
+                },
                 "layer_diffuse_mask": f"layerdiffuse_mask_{index + 1}",
+                "prompt": f"{character.trigger_word}, {', '.join(character.tags)}".strip(", "),
             }
         )
 
