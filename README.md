@@ -98,4 +98,28 @@ Full regression command:
 python -m pytest -q
 ```
 
-Next implementation target: Phase 3 will import `VideoJobResult` sidecars into Timeline + Chat Editing, route chat edits to `job_id`/clip time ranges, generate reversible replacement clips, and track review deltas across timeline versions.
+Phase 3 has now superseded this target with Timeline + Chat Editing and targeted regeneration.
+
+## Phase 3 Complete
+
+Phase 3 completes the Timeline + Chat Editing milestone from `docs/source_document.md`: clips can be organized in the playable Timeline tab, natural-language edit requests can be parsed into structured intents, and targeted regeneration can replace only the affected timeline clips while preserving untouched segments and clip provenance.
+
+Highlights:
+
+- **Phase 3.1 Timeline:** upload/import clips, reorder, trim, save/load timeline JSON, render MoviePy previews, and scrub source-accurate frames.
+- **Phase 3.2 Chat Parser:** preview structured edit intents from local Ollama, OpenRouter when configured, or deterministic fallback rules.
+- **Phase 3.3 Targeted Regeneration:** apply single-clip, range, transition, and global edits through the Phase 2 720p-first generate → auto-review → smart-loop extension flow, with JSON sidecars for audit, retry, and future cloud offload.
+
+Phase 3 test commands:
+
+```bash
+python -m pytest -q tests/test_timeline_phase31.py tests/test_chat_parser_phase32.py tests/test_regeneration_phase33.py
+```
+
+Full regression command:
+
+```bash
+python -m pytest -q
+```
+
+Next implementation target: Phase 4 will connect the recorded regeneration sidecars to RunPod/cloud execution, return remote clips into the exact local timeline slot, render timing transforms during final export, and polish cloud/local/hybrid status UX.
