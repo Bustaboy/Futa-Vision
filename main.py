@@ -20,9 +20,10 @@ import gradio as gr
 from dotenv import load_dotenv
 
 import hardware_check
+import library as character_library
 import training_orchestrator
 from hardware_check import report_to_markdown
-from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, weighted_score
+from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, score_partner_candidate, weighted_score
 
 APP_TITLE = "Futa-Vision Director"
 ADULT_CONFIRMATION_ENV = "FUTA_VISION_REQUIRE_ADULT_CONFIRMATION"
@@ -171,76 +172,53 @@ def setup_status() -> str:
         "## Actionable Phase TODOs",
         "- Phase 0: merged baseline Gradio shell, scoring math, setup detection, and hardware reporting.",
         "- TODO Phase 0.5: validate Ostris-produced checkpoints, add sample-image validation, and archive validation scores next to metadata.",
-        "- TODO Phase 1: replace placeholder library JSON with SQLite/JSON CRUD, searchable thumbnails, weighted scoring grid persistence, and Ostris partner training jobs.",
-        "- TODO Phase 1: add a first-run wizard that registers fixed male, General Physics LoRA, and partner LoRAs into the persistent library index.",
-        "- TODO Phase 1: load the approved General Physics LoRA automatically before partner starter-image generation and partner LoRA training.",
+        "- Phase 1: SQLite character library, searchable thumbnails, scoring-to-library registration, and scene load plans.",
+        "- TODO Phase 1: replace placeholder partner LoRA staging with real Ostris partner datasets/jobs once starter image generation lands.",
         "- TODO Phase 2: add ComfyUI extension checks for IPAdapter, AnimateDiff, Wan extender, LTX, Regional ControlNets, and LayerDiffuse plus RunPod preflight manifests.",
+        "- TODO Phase 2: implement video pipeline submission, clip auto-review, extension, timeline assembly, and final upscaling.",
     ]
     return "\n".join(lines)
 
 
-def sample_library() -> list[dict[str, Any]]:
-    """Return placeholder library rows until SQLite/JSON indexing is implemented."""
+def library_records(search_text: str = "", tag_filter: str = "", character_type: str = "all") -> tuple[list[tuple[str, str]], str]:
+    """Return a searchable thumbnail grid plus JSON metadata from SQLite."""
 
-    created_at = datetime.now(UTC).replace(microsecond=0).isoformat()
-    records = [
-        CharacterRecord(
-            id="male_locked_active",
-            display_name="Locked Male Receiver / POV",
-            type="fixed_male",
-            lora_path="library/male/active/model.safetensors",
-            thumbnail_path="library/male/active/thumb.png",
-            base_prompt="Imported or trained during first-time setup.",
-            negative_prompt="Identity drift, anatomy errors, style mismatch.",
-            score_average=0.0,
-            training_profile="locked_male_low_rank_v1",
-            created_at=created_at,
-            tags=["locked", "pov", "requires-setup"],
-            notes="Must be versioned and protected from accidental overwrite.",
-        ),
-        CharacterRecord(
-            id="general_physics_v1",
-            display_name="General Physics/Anatomy Base LoRA",
-            type="base_physics_lora",
-            lora_path="general_physics_lora/general_physics_v1.0.safetensors",
-            thumbnail_path="datasets/general_physics/physics_reference_01.png",
-            base_prompt="Physics-only prior for anatomy, contact, deformation, weight transfer, and motion plausibility.",
-            negative_prompt="Identity details, colors, hair, clothing, character traits, style drift.",
-            score_average=0.0,
-            training_profile="general_physics_low_rank_v1",
-            created_at=created_at,
-            tags=["physics", "anatomy", "base-lora", "phase-0.5"],
-            notes="Train from the Phase 0.5 tab before partner generation.",
-        ),
-        CharacterRecord(
-            id="partner_template_0001",
-            display_name="Partner Template",
-            type="partner_template",
-            lora_path="library/partners/partner_template_0001/model.safetensors",
-            thumbnail_path="library/partners/partner_template_0001/thumb.png",
-            base_prompt="Create via the Partner tab from text or base image.",
-            negative_prompt="Low score, identity instability, physics failure.",
-            score_average=0.0,
-            training_profile="low_rank_general_physics_v1",
-            created_at=created_at,
-            tags=["template", "needs-training"],
-        ),
-    ]
-    return [asdict(record) for record in records]
+    records = character_library.search_library(
+        query=search_text,
+        tags=tag_filter,
+        character_type=character_type,
+    )
+    return character_library.characters_to_gallery(records), character_library.records_json(records)
 
 
 def library_json(search_text: str = "") -> str:
-    """Filter placeholder library records by display name, id, type, or tags."""
+    """Compatibility helper used by tests and lightweight JSON refreshes."""
 
-    needle = search_text.lower().strip()
-    records = sample_library()
-    if needle:
-        records = [
-            record
-            for record in records
-            if needle in json.dumps(record, sort_keys=True).lower()
-        ]
-    return json.dumps(records, indent=2)
+    return character_library.records_json(character_library.search_library(search_text))
+
+
+def use_selected_characters_for_scene(
+    selected_character_ids: str, scene_prompt: str
+) -> tuple[str, str]:
+    """Build a Phase 1 dry-run scene plan for one or more library characters."""
+
+    ids = [item.strip() for item in selected_character_ids.split(",") if item.strip()]
+    try:
+        plan = character_library.load_for_scene(ids, base_scene_prompt=scene_prompt)
+    except Exception as exc:  # noqa: BLE001 - return user-friendly UI errors.
+        return f"## ❌ Scene load failed\n{exc}", ""
+    return (
+        "## Scene load plan ready\n"
+        "Characters are loaded on top of the General Physics Base LoRA with 720p defaults. "
+        "Phase 2 will map regional prompts to ControlNet/LayerDiffuse masks.",
+        json.dumps(plan, indent=2),
+    )
+
+
+def create_partner_tab_hint() -> dict[str, Any]:
+    """Switch users toward the Create Partner flow from the Library tab."""
+
+    return gr.update(selected="Create Partner")
 
 
 def score_partner_batch(
@@ -248,34 +226,31 @@ def score_partner_batch(
     physics: float,
     style: float,
     prior_scores_text: str,
-) -> tuple[str, str]:
-    """Score a placeholder partner image and report approval status."""
+    character_name: str,
+    trigger_word: str,
+    tag_text: str,
+    partner_prompt: str,
+    base_image: str | None,
+    save_as_fixed_male: bool,
+    allow_fixed_male_overwrite: bool,
+) -> tuple[str, str, str]:
+    """Score a partner candidate and register approved characters in SQLite."""
 
-    prior_scores: list[float] = []
-    if prior_scores_text.strip():
-        prior_scores = [
-            float(item.strip()) for item in prior_scores_text.split(",") if item.strip()
-        ]
-
-    score = weighted_score(anatomy, physics, style)
-    scores = [*prior_scores, score]
-    rolling = rolling_average(scores)
-    approved = is_approved(scores)
-    status = (
-        "APPROVED for Ostris partner LoRA training"
-        if approved
-        else "KEEP GENERATING/SCORING"
+    refs = [base_image] if base_image else []
+    return score_partner_candidate(
+        anatomy=anatomy,
+        physics=physics,
+        style=style,
+        prior_scores_text=prior_scores_text,
+        name=character_name,
+        trigger_word=trigger_word,
+        reference_sheet_images=refs,
+        tags=tag_text,
+        prompt=partner_prompt,
+        save_to_library=True,
+        save_as_fixed_male=save_as_fixed_male,
+        allow_fixed_male_overwrite=allow_fixed_male_overwrite,
     )
-
-    markdown = (
-        f"## Partner Score\n"
-        f"- Weighted score: **{score}**\n"
-        f"- Rolling last-10 average: **{rolling}**\n"
-        f"- Threshold: **{DEFAULT_THRESHOLD}+**\n"
-        f"- Status: **{status}**\n\n"
-        "TODO Phase 1: replace this placeholder with a persistent 10–20 image scoring grid backed by ComfyUI outputs."
-    )
-    return markdown, ", ".join(str(item) for item in scores)
 
 
 def build_generation_plan(
@@ -411,7 +386,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 0 merged. Now implementing Phase 0.5: General Physics/Anatomy Base LoRA trainer."
+            "Phase 1: full SQLite Character Library + enhanced scoring integration."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
@@ -424,261 +399,180 @@ def build_ui() -> gr.Blocks:
             interactive=require_adult_confirmation,
         )
         adult_gate_banner = gr.Markdown(
-            "## 🔒 Adult confirmation required\nConfirm the checkbox above to unlock Library, training, generation, and timeline tabs for this local session.",
+            "## 🔒 Adult confirmation required\nLibrary, Create Partner, generation, and timeline tabs are fully hidden until confirmation for this local session.",
             visible=not initial_interactive,
         )
 
-        with gr.Tab("Setup"):
-            confirmation_status = gr.Markdown(
-                adult_confirmation_status(initial_confirmed)
-            )
-            setup_output = gr.Markdown()
-            refresh_setup = gr.Button(
-                "Refresh setup paths and TODOs", variant="secondary"
-            )
-            refresh_setup.click(setup_status, outputs=setup_output)
-            demo.load(setup_status, outputs=setup_output)
+        with gr.Tabs() as app_tabs:
+            with gr.Tab("Setup", id="Setup"):
+                confirmation_status = gr.Markdown(adult_confirmation_status(initial_confirmed))
+                setup_output = gr.Markdown()
+                refresh_setup = gr.Button("Refresh setup paths and TODOs", variant="secondary")
+                refresh_setup.click(setup_status, outputs=setup_output)
+                demo.load(setup_status, outputs=setup_output)
 
-            gr.Markdown("## Live Hardware Status")
-            gr.Markdown(
-                "This section calls `hardware_check.collect_hardware_report()` and displays the full Markdown report."
-            )
-            hardware_output = gr.Markdown()
-            refresh_hardware = gr.Button("Refresh Hardware Status", variant="primary")
-            refresh_hardware.click(hardware_status_markdown, outputs=hardware_output)
-            demo.load(hardware_status_markdown, outputs=hardware_output)
-            training_defaults_output = gr.Markdown()
-            refresh_training_defaults = gr.Button(
-                "Refresh Phase 0.5 training defaults", variant="secondary"
-            )
-            refresh_training_defaults.click(
-                training_defaults_markdown, outputs=training_defaults_output
-            )
-            demo.load(training_defaults_markdown, outputs=training_defaults_output)
-            gr.Markdown(phase0_test_markdown())
+                gr.Markdown("## Live Hardware Status")
+                gr.Markdown("This section calls `hardware_check.collect_hardware_report()` and displays the full Markdown report.")
+                hardware_output = gr.Markdown()
+                refresh_hardware = gr.Button("Refresh Hardware Status", variant="primary")
+                refresh_hardware.click(hardware_status_markdown, outputs=hardware_output)
+                demo.load(hardware_status_markdown, outputs=hardware_output)
+                training_defaults_output = gr.Markdown()
+                refresh_training_defaults = gr.Button("Refresh Phase 0.5 training defaults", variant="secondary")
+                refresh_training_defaults.click(training_defaults_markdown, outputs=training_defaults_output)
+                demo.load(training_defaults_markdown, outputs=training_defaults_output)
+                gr.Markdown(phase0_test_markdown())
 
-        with gr.Tab("Train General Physics LoRA"):
-            with gr.Group(visible=not initial_interactive) as training_locked_group:
-                gr.Markdown(
-                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access the training workflow."
-                )
-            with gr.Group(visible=initial_interactive) as training_group:
+            with gr.Tab("Train General Physics LoRA", id="Train General Physics LoRA", visible=initial_interactive) as training_tab:
                 gr.Markdown(
                     "Train the Phase 0.5 identity-neutral General Physics/Anatomy Base LoRA using Ostris AI Toolkit. "
-                    "Captions are strictly physics-focused: contact, pressure, deformation, balance, joint alignment, and motion arcs only. "
-                    "TODO Phase 0.5: add validation sample generation and score persistence after real checkpoint discovery is verified. "
-                    "TODO Phase 1: auto-register the accepted LoRA in the persistent library and load it before partner workflows."
+                    "Partner/fixed-male LoRAs registered in Phase 1 are staged on top of this base."
                 )
                 dataset_status = gr.Markdown()
-                refresh_dataset = gr.Button(
-                    "Create/Refresh bundled neutral dataset", variant="secondary"
-                )
-                refresh_dataset.click(
-                    ensure_general_physics_dataset_status, outputs=dataset_status
-                )
+                refresh_dataset = gr.Button("Create/Refresh bundled neutral dataset", variant="secondary")
+                refresh_dataset.click(ensure_general_physics_dataset_status, outputs=dataset_status)
                 demo.load(ensure_general_physics_dataset_status, outputs=dataset_status)
-                use_bundled_dataset = gr.Checkbox(
-                    label="Use bundled neutral physics dataset", value=True
-                )
-                uploaded_dataset = gr.Files(
-                    label="Optional user dataset images",
-                    file_types=["image"],
-                    type="filepath",
-                )
-                dataset_path = gr.Textbox(
-                    label="Dataset path if not using bundled/upload",
-                    value="datasets/general_physics",
-                )
-                output_dir = gr.Textbox(
-                    label="Output directory", value="general_physics_lora"
-                )
+                use_bundled_dataset = gr.Checkbox(label="Use bundled neutral physics dataset", value=True)
+                uploaded_dataset = gr.Files(label="Optional user dataset images", file_types=["image"], type="filepath")
+                dataset_path = gr.Textbox(label="Dataset path if not using bundled/upload", value="datasets/general_physics")
+                output_dir = gr.Textbox(label="Output directory", value="general_physics_lora")
                 defaults = training_defaults()
                 with gr.Row():
-                    train_rank = gr.Slider(
-                        8, 16, value=defaults["rank_default"], step=1, label="LoRA rank"
-                    )
-                    train_epochs = gr.Slider(
-                        1, 50, value=defaults["epochs_default"], step=1, label="Epochs"
-                    )
-                    train_lr = gr.Number(
-                        value=defaults["learning_rate_default"],
-                        label="Learning rate",
-                        precision=6,
-                    )
-                use_low_vram = gr.Checkbox(
-                    label="Use low-VRAM FP8/INT8 optimized settings",
-                    value=defaults["use_low_vram"],
-                )
-                start_training = gr.Button(
-                    "Start Training", variant="primary", interactive=initial_interactive
-                )
+                    train_rank = gr.Slider(8, 16, value=defaults["rank_default"], step=1, label="LoRA rank")
+                    train_epochs = gr.Slider(1, 50, value=defaults["epochs_default"], step=1, label="Epochs")
+                    train_lr = gr.Number(value=defaults["learning_rate_default"], label="Learning rate", precision=6)
+                use_low_vram = gr.Checkbox(label="Use low-VRAM FP8/INT8 optimized settings", value=defaults["use_low_vram"])
+                start_training = gr.Button("Start Training", variant="primary", interactive=initial_interactive)
                 training_status = gr.Markdown()
                 training_logs = gr.Textbox(label="Live logs", lines=14)
                 training_artifact = gr.Code(label="Artifact JSON", language="json")
                 start_training.click(
                     start_general_physics_training,
-                    inputs=[
-                        use_bundled_dataset,
-                        uploaded_dataset,
-                        dataset_path,
-                        output_dir,
-                        train_rank,
-                        train_epochs,
-                        train_lr,
-                        use_low_vram,
-                    ],
+                    inputs=[use_bundled_dataset, uploaded_dataset, dataset_path, output_dir, train_rank, train_epochs, train_lr, use_low_vram],
                     outputs=[training_status, training_logs, training_artifact],
                 )
 
-        with gr.Tab("Library"):
-            with gr.Group(visible=not initial_interactive) as library_locked_group:
+            with gr.Tab("Character Library", id="Character Library", visible=initial_interactive) as library_tab:
                 gr.Markdown(
-                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to browse LoRA/library records."
+                    "Search reusable fixed male and partner LoRAs from the SQLite library. "
+                    "Use comma-separated ids to build single or multi-character scenes; Phase 2 will submit regional prompts to ControlNet/LayerDiffuse."
                 )
-            with gr.Group(visible=initial_interactive) as library_group:
-                gr.Markdown(
-                    "Browse fixed male, General Physics/Anatomy Base LoRA, and partner records. "
-                    "TODO Phase 1: replace placeholder JSON with SQLite-backed thumbnails, tags, favorites, and one-click LoRA loading. "
-                    "TODO Phase 1: add import/backup/version controls for every registered LoRA."
-                )
-                library_search = gr.Textbox(label="Search by id, name, type, or tag")
+                with gr.Row():
+                    library_search = gr.Textbox(label="Search by id, name, trigger, or tag", scale=2)
+                    library_tags = gr.Textbox(label="Required tags", placeholder="futa, slime, femboy", scale=1)
+                    library_type = gr.Dropdown(["all", "partner", "fixed_male"], value="all", label="Type", scale=1)
+                library_gallery = gr.Gallery(label="Character thumbnails", columns=4, height=360)
                 library_output = gr.Code(label="Library records", language="json")
-                library_search.change(
-                    library_json, inputs=library_search, outputs=library_output
-                )
-                demo.load(library_json, outputs=library_output)
+                refresh_library = gr.Button("Refresh Library", variant="secondary")
+                for trigger in (library_search.change, library_tags.change, library_type.change, refresh_library.click):
+                    trigger(library_records, inputs=[library_search, library_tags, library_type], outputs=[library_gallery, library_output])
+                demo.load(library_records, outputs=[library_gallery, library_output])
 
-        with gr.Tab("Create Partner"):
-            with gr.Group(visible=not initial_interactive) as partner_locked_group:
-                gr.Markdown(
-                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access partner creation."
+                gr.Markdown("## Use in Scene")
+                selected_library_ids = gr.Textbox(label="Character IDs (comma-separated; drag/copy ids from cards)")
+                library_scene_prompt = gr.Textbox(label="Scene prompt seed", lines=3)
+                use_scene_button = gr.Button("Use in Scene", variant="primary", interactive=initial_interactive)
+                scene_plan_status = gr.Markdown()
+                scene_plan_json = gr.Code(label="Scene load plan", language="json")
+                use_scene_button.click(
+                    use_selected_characters_for_scene,
+                    inputs=[selected_library_ids, library_scene_prompt],
+                    outputs=[scene_plan_status, scene_plan_json],
                 )
-            with gr.Group(visible=initial_interactive) as partner_group:
+                gr.Markdown("Drag-and-drop support TODO: Gradio gallery item drag metadata will feed this selected-id box once Phase 2 scene canvas lands.")
+                create_partner_shortcut = gr.Button("Create New Partner", variant="primary", interactive=initial_interactive)
+                create_partner_shortcut.click(lambda: gr.update(selected="Create Partner"), outputs=app_tabs)
+
+            with gr.Tab("Create Partner", id="Create Partner", visible=initial_interactive) as partner_tab:
                 gr.Markdown(
-                    "Generate 10–20 starter images, manually score Anatomy/Physics/Style, "
-                    "and train a partner LoRA when the last-10 average reaches 80+. "
-                    "TODO Phase 0.5: load the approved General Physics/Anatomy Base LoRA before partner image generation. "
-                    "TODO Phase 1: persist score rows and launch Ostris training when approved. "
-                    "TODO Phase 1: require the approved General Physics LoRA before partner generation begins."
+                    "Generate 10–20 starter images, manually score Anatomy/Physics/Style, and register approved characters at an 80+ last-10 average. "
+                    "All approved characters stage/train on top of the General Physics Base LoRA."
                 )
                 partner_prompt = gr.Textbox(label="Partner prompt", lines=4)
-                base_image = gr.Image(label="Optional base image", type="filepath")
+                base_image = gr.Image(label="Optional base/reference image", type="filepath")
                 with gr.Row():
-                    anatomy = gr.Slider(
-                        0, 100, value=80, step=1, label="Anatomy score (40%)"
-                    )
-                    physics = gr.Slider(
-                        0, 100, value=80, step=1, label="Physics score (40%)"
-                    )
-                    style = gr.Slider(
-                        0, 100, value=80, step=1, label="Style score (20%)"
-                    )
-                prior_scores = gr.Textbox(
-                    label="Prior weighted scores (comma-separated)"
-                )
-                score_button = gr.Button(
-                    "Score placeholder image", interactive=initial_interactive
-                )
+                    character_name = gr.Textbox(label="Library name", placeholder="Slime Partner A")
+                    trigger_word = gr.Textbox(label="Trigger word", placeholder="fv_partner_slime_a")
+                    tag_text = gr.Textbox(label="Tags", value="futa, slime")
+                with gr.Row():
+                    anatomy = gr.Slider(0, 100, value=80, step=1, label="Anatomy score (40%)")
+                    physics = gr.Slider(0, 100, value=80, step=1, label="Physics score (40%)")
+                    style = gr.Slider(0, 100, value=80, step=1, label="Style score (20%)")
+                prior_scores = gr.Textbox(label="Prior weighted scores (comma-separated)")
+                with gr.Row():
+                    save_as_fixed_male = gr.Checkbox(label="Save as fixed male / POV (protected)", value=False)
+                    allow_fixed_male_overwrite = gr.Checkbox(label="Allow fixed male overwrite (dangerous)", value=False)
+                score_button = gr.Button("Score image and save if approved", interactive=initial_interactive, variant="primary")
                 score_output = gr.Markdown()
                 generated_scores = gr.Textbox(label="Updated weighted scores")
+                registration_json = gr.Code(label="Scoring / library result", language="json")
                 score_button.click(
                     score_partner_batch,
-                    inputs=[anatomy, physics, style, prior_scores],
-                    outputs=[score_output, generated_scores],
+                    inputs=[anatomy, physics, style, prior_scores, character_name, trigger_word, tag_text, partner_prompt, base_image, save_as_fixed_male, allow_fixed_male_overwrite],
+                    outputs=[score_output, generated_scores, registration_json],
                 )
 
-        with gr.Tab("Generate Video"):
-            with gr.Group(visible=not initial_interactive) as generate_locked_group:
-                gr.Markdown(
-                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access generation planning."
-                )
-            with gr.Group(visible=initial_interactive) as generate_group:
+            with gr.Tab("Generate Video", id="Generate Video", visible=initial_interactive) as generate_tab:
                 gr.Markdown(
                     "Create short 5–10 second clips at 720p, auto-review, extend, and send accepted clips to the timeline. "
-                    "TODO Phase 2: submit real ComfyUI Wan/LTX workflows, sample frames for auto-review, and quarantine clips below 80."
+                    "TODO Phase 2: submit real ComfyUI Wan/LTX workflows, sample frames for auto-review, quarantine clips below 80, and preserve character library provenance."
                 )
                 scene_prompt = gr.Textbox(label="Scene prompt", lines=5)
-                selected_partners = gr.Textbox(
-                    label="Selected partner LoRA IDs",
-                    placeholder="partner_0001, partner_0002",
-                )
-                pipeline = gr.Radio(
-                    ["ltx-2.3-preview", "wan-2.7-physics"],
-                    value="ltx-2.3-preview",
-                    label="Pipeline",
-                )
-                duration = gr.Slider(
-                    5, 10, value=5, step=1, label="Clip duration seconds"
-                )
-                use_runpod = gr.Checkbox(
-                    label="Offload this job to RunPod", value=False
-                )
-                generate_plan = gr.Button(
-                    "Build dry-run generation plan",
-                    variant="primary",
-                    interactive=initial_interactive,
-                )
+                selected_partners = gr.Textbox(label="Selected library character IDs", placeholder="partner_0001, partner_0002")
+                pipeline = gr.Radio(["ltx-2.3-preview", "wan-2.7-physics"], value="ltx-2.3-preview", label="Pipeline")
+                duration = gr.Slider(5, 10, value=5, step=1, label="Clip duration seconds")
+                use_runpod = gr.Checkbox(label="Offload this job to RunPod", value=False)
+                generate_plan = gr.Button("Build dry-run generation plan", variant="primary", interactive=initial_interactive)
                 plan_output = gr.Markdown()
-                generate_plan.click(
-                    build_generation_plan,
-                    inputs=[
-                        scene_prompt,
-                        selected_partners,
-                        pipeline,
-                        duration,
-                        use_runpod,
-                    ],
-                    outputs=plan_output,
-                )
+                generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, use_runpod], outputs=plan_output)
 
-        with gr.Tab("Timeline"):
-            with gr.Group(visible=not initial_interactive) as timeline_locked_group:
-                gr.Markdown(
-                    "## 🔒 Locked until adult confirmation\nConfirm the checkbox at the top of the app to access timeline editing."
-                )
-            with gr.Group(visible=initial_interactive) as timeline_group:
+            with gr.Tab("Timeline", id="Timeline", visible=initial_interactive) as timeline_tab:
                 gr.Markdown(
                     "Playable timeline placeholder with edit chat. "
-                    "TODO Phase 2: add clip provenance, reorder/trim/replace metadata, and final upscale export. "
+                    "TODO Phase 2: add clip provenance, reorder/trim/replace metadata, final upscale export, and video pipeline status queues. "
                     "TODO Phase 3: connect chat edits to targeted regeneration and timeline version history."
                 )
-                timeline_notes = gr.Textbox(
-                    label="Timeline notes / clip provenance", lines=10
-                )
-                chat_message = gr.Textbox(
-                    label="Chat edit request",
-                    placeholder="Fix this transition or slow the whole scene down.",
-                )
-                chat_button = gr.Button(
-                    "Create placeholder edit intent", interactive=initial_interactive
-                )
+                timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=10)
+                chat_message = gr.Textbox(label="Chat edit request", placeholder="Fix this transition or slow the whole scene down.")
+                chat_button = gr.Button("Create placeholder edit intent", interactive=initial_interactive)
                 chat_response = gr.Markdown()
-                chat_button.click(
-                    timeline_placeholder,
-                    inputs=[chat_message, timeline_notes],
-                    outputs=[chat_response, timeline_notes],
-                )
+                chat_button.click(timeline_placeholder, inputs=[chat_message, timeline_notes], outputs=[chat_response, timeline_notes])
+
+        def _gate_update(confirmed: bool) -> list[Any]:
+            unlocked = confirmed or not adult_confirmation_required()
+            return [
+                adult_confirmation_status(confirmed),
+                gr.update(visible=not unlocked),
+                gr.update(visible=unlocked),
+                gr.update(visible=unlocked),
+                gr.update(visible=unlocked),
+                gr.update(visible=unlocked),
+                gr.update(visible=unlocked),
+                gr.update(selected="Setup" if not unlocked else "Character Library"),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+            ]
 
         adult_confirmed.change(
-            gate_update,
+            _gate_update,
             inputs=adult_confirmed,
             outputs=[
                 confirmation_status,
                 adult_gate_banner,
-                training_locked_group,
-                library_locked_group,
-                partner_locked_group,
-                generate_locked_group,
-                timeline_locked_group,
-                training_group,
-                library_group,
-                partner_group,
-                generate_group,
-                timeline_group,
+                training_tab,
+                library_tab,
+                partner_tab,
+                generate_tab,
+                timeline_tab,
+                app_tabs,
                 start_training,
+                use_scene_button,
+                create_partner_shortcut,
                 score_button,
                 generate_plan,
-                chat_button,
             ],
         )
 
@@ -697,7 +591,6 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# TODO Phase 0.5: add validation-sample scoring for the General Physics LoRA.
-# TODO Phase 1: split placeholders into `library_index.py`, `comfy_client.py`,
-# `video_assembly.py`, `chat_parser.py`, and `runpod_client.py` with tests.
-# TODO Phase 1: persist General Physics LoRA approval metadata before enabling partner workflows.
+# TODO Phase 2: add ComfyUI workflow clients, video assembly, RunPod offload,
+# clip auto-review, and timeline provenance modules with tests.
+# TODO Phase 2: map library scene plans to Regional ControlNets and LayerDiffuse masks.
