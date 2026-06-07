@@ -40,6 +40,8 @@ safetensors==0.7.0
 Pillow==12.0.0
 numpy==2.3.5
 opencv-python==4.12.0.88
+# Phase 3.1 timeline trimming/concatenation and playable preview rendering.
+moviepy==2.2.1
 
 # Development/test dependencies for Phase 0 / Phase 0.5 smoke tests.
 # setup.py also exposes pytest through the `dev` extra for contributors who prefer extras-based installs.
