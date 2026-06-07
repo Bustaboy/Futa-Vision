@@ -241,6 +241,49 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
     )
 
 
+def get_low_vram_settings() -> dict[str, Any]:
+    """Return hardware-aware defaults for 8 GB LoRA training and generation.
+
+    Phase 0.5 consumes these settings when generating Ostris AI Toolkit configs.
+    The values intentionally favor reliability on RTX 4070-class 8 GB systems:
+    batch size 1, disk latent caching, checkpointing, 8-bit optimizer, FP8/INT8
+    quantization hints where supported, and RunPod as a fallback rather than the
+    default local path when CUDA is available.
+    """
+
+    report = collect_hardware_report()
+    low_vram = (
+        report.recommended_mode in {"local_low_vram", "cloud_recommended"}
+        or report.gpu.total_vram_gb is None
+        or report.gpu.total_vram_gb <= LOW_VRAM_THRESHOLD_GB
+    )
+    return {
+        "enabled": low_vram,
+        "recommended_mode": report.recommended_mode,
+        "gpu_name": report.gpu.name,
+        "total_vram_gb": report.gpu.total_vram_gb,
+        "train_batch_size": 1,
+        "sample_batch_size": 1,
+        "gradient_accumulation_steps": 4 if low_vram else 1,
+        "gradient_checkpointing": low_vram,
+        "cache_latents_to_disk": True,
+        "mixed_precision": "bf16",
+        "save_precision": "fp16",
+        "optimizer": "adamw8bit",
+        "quantization": "fp8_int8",
+        "max_resolution": 768 if low_vram else 1024,
+        "default_lora_rank": 8 if low_vram else 16,
+        "max_lora_rank": 16,
+        "runpod_fallback": True,
+        "estimated_minutes_per_epoch": 3.0 if low_vram else 1.5,
+        "notes": [
+            "Use low-rank LoRA values between 8 and 16.",
+            "Keep captions physics/anatomy-focused and identity-neutral.",
+            "If CUDA OOM occurs, reduce rank/epochs first, then offload to RunPod.",
+        ],
+    }
+
+
 def report_to_markdown(report: HardwareReport) -> str:
     """Render a human-readable report for Gradio Markdown components."""
 

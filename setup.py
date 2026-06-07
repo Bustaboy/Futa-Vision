@@ -130,6 +130,8 @@ def ensure_project_directories() -> None:
         "library/partners",
         "library/indexes",
         "general_physics_lora",
+        "datasets/general_physics",
+        "datasets/uploads/general_physics",
         "datasets/male",
         "datasets/partners",
         "outputs/images",

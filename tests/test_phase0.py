@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hardware_check import GPUInfo, HardwareReport, build_recommendations, report_to_markdown
+from hardware_check import GPUInfo, HardwareReport, build_recommendations, get_low_vram_settings, report_to_markdown
 from scoring import rolling_average, weighted_score
 
 
@@ -100,5 +100,16 @@ def test_markdown_report_mentions_720p_upscale_strategy() -> None:
     assert "SeedVR 2.5" in markdown
     assert "RTX Video SR" in markdown
     assert "Nomos2" in markdown
+
+
+def test_low_vram_settings_shape() -> None:
+    """Phase 0.5 training should expose concrete low-VRAM LoRA defaults."""
+
+    settings = get_low_vram_settings()
+    assert settings["train_batch_size"] == 1
+    assert settings["default_lora_rank"] in {8, 16}
+    assert settings["max_lora_rank"] == 16
+    assert settings["cache_latents_to_disk"] is True
+    assert settings["quantization"] == "fp8_int8"
 
 # Next step: add integration tests for setup.py path detection with temporary Pinokio-style folders.
