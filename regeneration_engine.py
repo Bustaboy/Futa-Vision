@@ -463,6 +463,11 @@ def _operation_sidecar_path(regeneration_id: str, clip_id: str | None, index: in
 def _write_operation_sidecar(regeneration_id: str, operation: dict[str, Any]) -> str:
     """Write per-target operation metadata for local retry/cloud handoff."""
 
+    # Recovery strategy: each target clip gets its own operation sidecar so a
+    # failed local regeneration can be retried or offloaded without replaying
+    # unrelated timeline edits.  Phase 4 RunPod jobs should upload this file plus
+    # the referenced Phase 2 sidecars, then return a replacement artifact for the
+    # same clip_id/order slot.
     path = _operation_sidecar_path(regeneration_id, operation.get("clip_id"), int(operation.get("index", 0)))
     sidecar = {
         "schema_version": REGENERATION_SCHEMA_VERSION,
@@ -578,6 +583,10 @@ def _apply_timing_transform(state: dict[str, Any], parsed_command: dict[str, Any
 def _write_regeneration_sidecar(regeneration_id: str, payload: dict[str, Any]) -> str:
     """Persist the Phase 3.3 regeneration operation sidecar."""
 
+    # The top-level sidecar is the audit/recovery manifest for the whole edit:
+    # it records timeline hashes, preserved clips, target clips, and child
+    # operation sidecars so a crash can resume from the last completed target
+    # instead of regenerating the entire timeline.
     path = DEFAULT_REGENERATION_DIR / f"{regeneration_id}.json"
     sidecar = {
         "schema_version": REGENERATION_SCHEMA_VERSION,

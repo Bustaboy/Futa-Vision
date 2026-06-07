@@ -671,6 +671,7 @@ def build_ui() -> gr.Blocks:
                         chat_response,
                         timeline_notes,
                     ],
+                    show_progress="full",
                 )
 
         def _gate_update(confirmed: bool) -> list[Any]:
