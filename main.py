@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 
 import hardware_check
 import library as character_library
+import timeline
 import training_orchestrator
 import video_assembly
 from hardware_check import report_to_markdown
@@ -136,6 +137,9 @@ def ensure_storage(paths: AppPaths) -> None:
         paths.outputs_dir / "clips",
         paths.outputs_dir / "extended_clips",
         paths.outputs_dir / "final_videos",
+        paths.outputs_dir / "timelines",
+        paths.outputs_dir / "timelines" / "previews",
+        paths.outputs_dir / "timelines" / "thumbnails",
         paths.workflows_dir / "comfy",
         paths.workflows_dir / "ostris",
         paths.logs_dir,
@@ -441,7 +445,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 2: video generation pipeline with 720p smart looping and final upscale."
+            "Phase 3.1: core playable timeline UI on top of the Phase 2 video pipeline."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
@@ -600,13 +604,15 @@ def build_ui() -> gr.Blocks:
                     outputs=[plan_output, pipeline_json, final_video_file],
                 )
 
-            with gr.Tab("Timeline", id="Timeline", visible=initial_interactive) as timeline_tab:
+            with gr.Tab("🎬 Timeline & Edit", id="Timeline & Edit", visible=initial_interactive) as timeline_tab:
                 gr.Markdown(
-                    "Playable timeline placeholder with edit chat. "
-                    "TODO Phase 2: add clip provenance, reorder/trim/replace metadata, final upscale export, and video pipeline status queues. "
-                    "TODO Phase 3: connect chat edits to VideoJobResult job_id/time ranges, targeted regeneration, timeline version history, and review deltas."
+                    "Phase 3.1 core timeline editor: horizontally scrollable clip cards, drag-and-drop ordering, "
+                    "per-clip trim controls, thumbnail previews, JSON save/load, and MoviePy-backed playable preview rendering. "
+                    "The adult confirmation gate controls this entire tab."
                 )
-                timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=10)
+                timeline_components = timeline.build_timeline_editor(initial_interactive=initial_interactive)
+                gr.Markdown("## Chat edit notes placeholder")
+                timeline_notes = gr.Textbox(label="Timeline notes / clip provenance", lines=6)
                 chat_message = gr.Textbox(label="Chat edit request", placeholder="Fix this transition or slow the whole scene down.")
                 chat_button = gr.Button("Create placeholder edit intent", interactive=initial_interactive)
                 chat_response = gr.Markdown()
@@ -630,6 +636,7 @@ def build_ui() -> gr.Blocks:
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
+                *[gr.update(interactive=unlocked) for _ in timeline_components["gated_controls"]],
             ]
 
         adult_confirmed.change(
@@ -651,6 +658,7 @@ def build_ui() -> gr.Blocks:
                 generate_plan,
                 generate_video,
                 preview_characters,
+                *timeline_components["gated_controls"],
             ],
         )
 
