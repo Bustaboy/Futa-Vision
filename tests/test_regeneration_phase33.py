@@ -239,3 +239,97 @@ def test_gradio_apply_regeneration_returns_timeline_payloads(tmp_path: Path, cha
     assert "fv-timeline" in html_view
     assert preview is None
     assert "3.3_targeted_regeneration" in notes
+
+
+def test_clip_id_target_and_operation_sidecar_capture_retry_metadata(tmp_path: Path, character_db: Path) -> None:
+    state = _timeline_state(tmp_path, character_db, clip_count=2)
+    original_paths = [clip["source_path"] for clip in state["clips"]]
+    command = _parse("regenerate clip 1 with stronger physics", state, character_db)
+    command["target_clips"] = [{"clip_id": "clip_2"}]
+
+    updated = regeneration_engine.apply_regeneration_command(state, command)
+
+    result = updated["regeneration_last_result"]
+    assert result["target_clip_ids"] == ["clip_2"]
+    assert updated["clips"][0]["source_path"] == original_paths[0]
+    assert updated["clips"][1]["source_path"] != original_paths[1]
+    assert result["operation_sidecars"]
+    operation_sidecar = json.loads(Path(result["operation_sidecars"][0]).read_text())
+    operation = operation_sidecar["operation"]
+    assert operation_sidecar["schema_version"] == regeneration_engine.REGENERATION_SCHEMA_VERSION
+    assert operation["clip_id"] == "clip_2"
+    assert operation["source_clip_hash"] == updated["clips"][1]["version_history"][0]["source_clip_hash"]
+    assert operation["scene_config"]["regeneration"]["preserve_timeline_slot"] is True
+
+
+def test_time_range_target_regenerates_intersecting_clips_only(tmp_path: Path, character_db: Path) -> None:
+    state = _timeline_state(tmp_path, character_db, clip_count=3)
+    original_paths = [clip["source_path"] for clip in state["clips"]]
+    command = _parse("regenerate clip 1 with stronger physics", state, character_db)
+    command["target_clips"] = [{"time_start": 7.5, "time_end": 16.5}]
+
+    updated = regeneration_engine.apply_regeneration_command(state, command)
+
+    result = updated["regeneration_last_result"]
+    assert result["status"] == "complete"
+    assert result["target_clip_ids"] == ["clip_1", "clip_2", "clip_3"]
+    assert all(updated["clips"][index]["source_path"] != original_paths[index] for index in range(3))
+
+
+def test_low_confidence_command_writes_sidecar_without_regeneration(tmp_path: Path, character_db: Path) -> None:
+    state = _timeline_state(tmp_path, character_db, clip_count=1)
+    original_path = state["clips"][0]["source_path"]
+    command = {
+        "action_type": "regenerate_clip",
+        "target_clips": [1],
+        "parameters": {"db_path": str(character_db)},
+        "confidence": 0.1,
+        "raw_explanation": "too ambiguous",
+    }
+
+    updated = regeneration_engine.apply_regeneration_command(state, command)
+
+    result = updated["regeneration_last_result"]
+    assert result["status"] == "needs_confirmation"
+    assert updated["clips"][0]["source_path"] == original_path
+    assert result["stage_results"] == []
+    assert Path(result["sidecar_path"]).exists()
+    sidecar = json.loads(Path(result["sidecar_path"]).read_text())
+    assert sidecar["timeline_hash_before"] == result["timeline_hash_before"]
+    assert sidecar["timeline_hash_after"] == result["timeline_hash_after"]
+
+
+def test_one_sided_transition_target_expands_to_adjacent_clip(tmp_path: Path, character_db: Path) -> None:
+    state = _timeline_state(tmp_path, character_db, clip_count=3)
+    original_paths = [clip["source_path"] for clip in state["clips"]]
+    command = {
+        "action_type": "adjust_transition",
+        "target_clips": [2],
+        "parameters": {"db_path": str(character_db), "transition": {"continuity": "smooth"}},
+        "confidence": 0.8,
+        "raw_explanation": "one-sided transition target",
+    }
+
+    updated = regeneration_engine.apply_regeneration_command(state, command)
+
+    result = updated["regeneration_last_result"]
+    assert result["status"] == "complete"
+    assert result["target_clip_ids"] == ["clip_2", "clip_3"]
+    assert "Expanded one-sided transition target" in "\n".join(result["warnings"])
+    assert updated["clips"][0]["source_path"] == original_paths[0]
+    assert updated["clips"][1]["source_path"] != original_paths[1]
+    assert updated["clips"][2]["source_path"] != original_paths[2]
+
+
+def test_out_of_range_target_is_reported_without_touching_clips(tmp_path: Path, character_db: Path) -> None:
+    state = _timeline_state(tmp_path, character_db, clip_count=1)
+    original_path = state["clips"][0]["source_path"]
+    command = _parse("regenerate clip 9 with stronger physics", state, character_db)
+
+    updated = regeneration_engine.apply_regeneration_command(state, command)
+
+    result = updated["regeneration_last_result"]
+    assert updated["clips"][0]["source_path"] == original_path
+    assert result["status"] == "needs_confirmation"
+    assert result["stage_results"] == []
+    assert "Ignored out-of-range clip target" in "\n".join(result["warnings"])
