@@ -19,6 +19,7 @@ from typing import Any
 import gradio as gr
 from dotenv import load_dotenv
 
+import chat_parser
 import hardware_check
 import library as character_library
 import timeline
@@ -343,28 +344,28 @@ def run_video_generation_pipeline(
     )
 
 
-def phase32_chat_edit_stub(chat_message: str, timeline_notes: str) -> tuple[str, str]:
-    """Create a Phase 3.2 chat-parser edit intent stub for timeline notes."""
+async def parse_timeline_chat_edit(chat_message: str, timeline_state_json: str, timeline_notes: str) -> tuple[str, str]:
+    """Parse a Phase 3.2 natural-language edit request and preview the intent."""
 
-    clean_message = (chat_message or "").strip()
-    timestamp = datetime.now(UTC).replace(microsecond=0).isoformat()
-    intent = {
-        "created_at": timestamp,
-        "phase": "3.2_chat_parser_stub",
-        "request": clean_message or "No edit text provided.",
+    try:
+        timeline_state = json.loads(timeline_state_json) if timeline_state_json else {}
+    except json.JSONDecodeError:
+        timeline_state = {}
+    intent = await chat_parser.parse_chat_command(chat_message, timeline_state)
+    event = {
+        "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "phase": "3.2_chat_parser",
+        "request": (chat_message or "").strip(),
+        "intent": intent,
         "next_steps": [
-            "Parse user request with chat_parser.py into clip_id/time-range targets.",
-            "Generate replacement/transform jobs for the affected TimelineClip entries.",
-            "Re-score edited clips and preserve before/after timeline versions.",
+            "Phase 3.3 will map this preview to TimelineClip IDs and source time ranges.",
+            "Targeted regeneration/transform jobs will preserve before/after timeline versions.",
+            "Edited clips must pass the Phase 2 quality gate before replacement.",
         ],
     }
-    updated_notes = (timeline_notes + "\n" + json.dumps(intent, sort_keys=True)).strip()
-    response = (
-        "## Phase 3.2 edit intent queued\n"
-        "This is a structured stub for the upcoming Chat Parser workflow. Phase 3.2 will map the request "
-        "to TimelineClip IDs and source/time ranges, then hand targeted regeneration jobs back to the video pipeline.\n\n"
-        "```json\n" + json.dumps(intent, indent=2) + "\n```"
-    )
+    existing_notes = (timeline_notes or "").strip()
+    updated_notes = (existing_notes + "\n" + json.dumps(event, sort_keys=True)).strip()
+    response = chat_parser.intent_to_markdown(intent)
     return response, updated_notes
 
 
@@ -458,7 +459,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 3.1: core playable timeline UI on top of the Phase 2 video pipeline."
+            "Phase 3.2: LLM chat parser previews structured timeline edit intents."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
@@ -625,15 +626,23 @@ def build_ui() -> gr.Blocks:
                 )
                 timeline_components = timeline.build_timeline_editor(initial_interactive=initial_interactive)
                 gr.Markdown(
-                    "## Phase 3.2 Chat Parser Stub\n"
-                    "Capture natural-language edit requests as structured intents. The next phase will connect these intents "
-                    "to `chat_parser.py`, TimelineClip IDs, source time ranges, targeted regeneration, and timeline version history."
+                    "## Phase 3.2 LLM Chat Parser\n"
+                    "Enter natural-language edit requests to preview a structured intent. Ollama is tried first for local parsing, "
+                    "OpenRouter is supported when configured, and deterministic rules keep the UI useful if no LLM is available."
                 )
                 timeline_notes = gr.Textbox(label="Structured edit intents / clip provenance", lines=6)
-                chat_message = gr.Textbox(label="Chat edit request", placeholder="Fix this transition or slow the whole scene down.")
-                chat_button = gr.Button("Queue Phase 3.2 edit intent", interactive=initial_interactive)
-                chat_response = gr.Markdown()
-                chat_button.click(phase32_chat_edit_stub, inputs=[chat_message, timeline_notes], outputs=[chat_response, timeline_notes])
+                chat_message = gr.Textbox(
+                    label="Chat edit request",
+                    placeholder="fix sudden position change between clip 3 and 4",
+                    lines=2,
+                )
+                chat_button = gr.Button("Send Edit Request", interactive=initial_interactive, variant="primary")
+                chat_response = gr.Markdown(label="Parsed intent preview")
+                chat_button.click(
+                    parse_timeline_chat_edit,
+                    inputs=[chat_message, timeline_components["state_json"], timeline_notes],
+                    outputs=[chat_response, timeline_notes],
+                )
 
         def _gate_update(confirmed: bool) -> list[Any]:
             unlocked = confirmed or not adult_confirmation_required()
