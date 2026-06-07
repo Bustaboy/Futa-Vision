@@ -349,6 +349,8 @@ Recommended setup helper:
 Optional helper features:
 
 - Civitai helper button for recommended LoRAs and model assets.
+- Civitai copy-paste recommendation drawer with tagged searches for: slime girl/slime body material, futa anatomy, semi-realistic 3D anime, body/skin deformation, contact pressure, jiggle/soft-body physics, translucent material, hand/body interaction fixes, anatomy correction, facial consistency, and motion consistency.
+- Per-asset compatibility notes for base model family, trigger words, recommended weights, license/usage warnings, and whether the asset is safe for the General Physics/Anatomy Base LoRA or should remain partner-specific.
 - Dependency status page.
 - Automatic model folder detection.
 - Missing-extension warning system.
@@ -431,11 +433,14 @@ Fixed male setup flow:
 5. The character is locked.
 6. Later workflows reference this locked identity automatically.
 
-Locking rules:
+Locking rules and versioning:
 
 - The fixed male LoRA should not be overwritten by partner training.
 - The app should require explicit confirmation before retraining or replacing the fixed male.
-- Any replacement creates a versioned backup.
+- Any retrain, replacement, recaption, FaceID/Phantom reference update, or metadata migration creates an automatic versioned backup before changes are applied.
+- Backups should be immutable by default and stored as timestamped snapshots under `library/male/backups/<version_id>/` with LoRA file, reference images, captions, metadata, thumbnail, training config, and validation scores.
+- The UI should expose restore, compare, and “make active” actions so users can recover the prior locked male if a retrain drifts from the approved identity.
+- Partner jobs must always resolve the active fixed-male version by ID, not by a mutable path alias alone.
 
 ### 4.4 General Physics/Anatomy Base LoRA
 
@@ -653,9 +658,11 @@ Goals:
 - Detect ComfyUI and Ostris installations.
 - Validate GPU/VRAM detection.
 
-Milestone:
+Milestone and checkpoints:
 
-- App can detect local GPU, ComfyUI, Ostris, and required model folders.
+- Dependency screen reports local GPU, VRAM, CUDA availability, ComfyUI, Ostris, required extensions, required model folders, and writable output folders.
+- User can complete first-time setup in local mode without editing config files manually.
+- Missing dependency warnings include a direct remediation action or setup link.
 
 ### Phase 0.5 — General Physics/Anatomy Base LoRA Trainer
 
@@ -667,9 +674,11 @@ Goals:
 - Save trained base LoRA.
 - Add validation score flow.
 
-Milestone:
+Milestone and checkpoints:
 
 - General Physics/Anatomy Base LoRA can be trained or imported and selected by later workflows.
+- Validation run produces scored sample images using identity-neutral physics captions.
+- Failed or low-scoring validation outputs produce actionable caption/workflow adjustment suggestions.
 
 ### Phase 1 — Scoring Grid and Character Library
 
@@ -686,9 +695,11 @@ Fast implementation path:
 - Start in Gradio for speed if needed.
 - Later migrate to Tauri/Svelte production UI.
 
-Milestone:
+Milestone and checkpoints:
 
-- User can create a partner LoRA and generate a 20-second looped clip.
+- User can create a partner LoRA from a prompt or base image.
+- Scoring grid calculates weighted scores and the rolling last-10 average correctly.
+- End of Phase 1 target: successful 20-second looped clip using the locked male and one approved partner, with stable identities and an 80+ review score.
 
 ### Phase 2 — Video Pipeline
 
@@ -701,9 +712,11 @@ Goals:
 - Add clip discard/regenerate loop.
 - Add final upscale pass.
 
-Milestone:
+Milestone and checkpoints:
 
 - App can generate, extend, review, assemble, upscale, and export a 3-minute video.
+- Below-threshold clips are automatically discarded or quarantined and regenerated with visible retry status.
+- Low-VRAM mode demonstrates a completed 720p local clip path and a documented fallback path.
 
 ### Phase 3 — Chat and Full Timeline
 
@@ -716,9 +729,11 @@ Goals:
 - Add transition correction.
 - Add whole-video edit commands.
 
-Milestone:
+Milestone and checkpoints:
 
 - App can produce a 15-minute edited video with chat-assisted corrections.
+- Timeline supports drag/drop, trim, replace, extend, score badges, and clip-level version history.
+- Chat can regenerate a targeted clip and fix a transition without changing unrelated timeline segments.
 
 ### Phase 4 — Cloud Integration and Polish
 
@@ -730,9 +745,11 @@ Goals:
 - Add remote job return to local timeline.
 - Polish UI and error handling.
 
-Milestone:
+Milestone and checkpoints:
 
 - User can offload heavy work to RunPod and continue local timeline review.
+- A failed local 720p job can be retried, degraded to preview, or offloaded with preserved job state.
+- Returned cloud outputs are inserted into the correct local timeline slot with scores and provenance metadata.
 
 ### Phase 5 — Stretch: Audio and Lip-Sync
 
@@ -743,9 +760,11 @@ Goals:
 - Add music/ambience timeline lanes.
 - Add audio-aware clip timing.
 
-Milestone:
+Milestone and checkpoints:
 
 - App can export a video with synchronized optional audio layers.
+- Optional lip-sync pass can align generated or imported dialogue to selected character face regions when appropriate.
+- Music/ambience lanes can be muted, trimmed, reordered, and exported with the final timeline.
 
 ## 8. Implementation Details and Best Practices
 
@@ -779,7 +798,46 @@ Recommended prompt template fields:
 - Style profile.
 - Seed and reproducibility settings.
 
-### 8.3 Error Handling
+#### 8.2.1 Ready-to-Use Prompt Templates and Negatives
+
+Prompt templates should stay editable in the UI and saved with a version ID next to every generated image or clip. The examples below are implementation fixtures for early workflow testing; teams should tune model-specific trigger words and LoRA weights per model profile.
+
+**Starter partner image positive template:**
+
+```text
+semi-realistic 3D anime adult character, polished character sheet, full body, clear silhouette, accurate anatomy, balanced proportions, expressive face, soft cinematic lighting, subsurface skin shading, clean hands, stable identity, high-detail material response, believable body weight, contact-ready pose, physics-aware anatomy, neutral background, sharp focus
+```
+
+**Starter partner image negative template:**
+
+```text
+minor, underage, non-consensual, illegal content, gore, broken anatomy, extra limbs, missing limbs, fused fingers, malformed hands, distorted face, identity drift, inconsistent eyes, bad proportions, flat lighting, low resolution, blurry, noisy, watermark, text, logo, compression artifacts, plastic skin, over-smoothed details
+```
+
+**Physics-heavy clip positive template:**
+
+```text
+semi-realistic 3D anime adult scene, locked male identity, selected partner identity, consistent character scale, accurate anatomy, believable contact physics, pressure response, soft-body deformation, skin indentation, weight transfer, slime viscosity, translucent slime material, internal bubbles, fluid flow, jiggle physics, coherent motion, stable camera, temporal consistency, cinematic soft lighting, high-detail render
+```
+
+**Physics-heavy clip negative template:**
+
+```text
+minor, underage, non-consensual, illegal content, gore, character swap, identity drift, anatomy collapse, disconnected contact, floating bodies, clipping, impossible penetration geometry, rubber limbs, frozen motion, jitter, flicker, frame warping, melted face, duplicate body parts, bad hands, broken shadows, inconsistent lighting, watermark, text, logo
+```
+
+**Multi-character regional prompt skeleton:**
+
+```text
+GLOBAL: semi-realistic 3D anime, adult characters only, cinematic lighting, accurate anatomy, consistent scale, temporal consistency, believable contact physics
+REGION_A_FIXED_MALE: <fixed_male_lora:ACTIVE_VERSION>, locked identity, FaceID/Phantom reference, stable receiver/POV character
+REGION_B_PARTNER_1: <partner_lora:WEIGHT>, partner trigger words, character-specific identity details from library metadata only
+REGION_C_PARTNER_2_OPTIONAL: <partner_lora:WEIGHT>, partner trigger words, isolated identity details
+MOTION: smooth loopable motion, weight transfer, pressure/deformation cues, slime flow where applicable, no camera jump
+NEGATIVE: use the strong negative template for the active model profile
+```
+
+### 8.3 Error Handling and Graceful Degradation
 
 Required error handling:
 
@@ -791,18 +849,45 @@ Required error handling:
 - Network failure handling for RunPod/OpenRouter.
 - Local LLM fallback when remote LLM fails.
 
-### 8.4 NSFW and Local-Only Defaults
+Graceful degradation behavior:
+
+- On GPU OOM, pause the job, save its state, lower batch size first, then lower preview resolution, then enable stronger quantization or disk caching, then retry automatically up to the configured retry limit.
+- If 720p local generation still fails after retries, fall back to a lower-resolution preview workflow and offer automatic RunPod offload for the full-quality job.
+- If the user has enabled hybrid mode and cloud credentials are available, the app may automatically package the failed workflow, upload only the required assets after confirmation, run it remotely, and return the output to the same local timeline slot.
+- Progress bars must distinguish queued, preparing assets, uploading, running, downloading, scoring, retrying, failed, cancelled, and completed states.
+- Retry logs should show the attempted resolution, batch size, quantization mode, workflow profile, seed, and failure reason.
+- Failed jobs should preserve prompts, seeds, LoRA versions, input frames, and timeline placement so the user can retry, edit, offload, or delete without losing work.
+- Corrupt or below-threshold outputs should be quarantined with metadata for debugging rather than silently deleted.
+
+### 8.4 Security, Privacy, NSFW Disclaimer, and Local-Only Defaults
 
 The app should include:
 
-- Adult-content disclaimer.
+- One-time splash screen / age gate requiring the user to confirm they are an adult and that they will only create lawful, consensual adult content.
+- Adult-content disclaimer explaining that the app is an NSFW creative tool and that the user is responsible for complying with applicable laws and platform rules.
+- “All generations stay local by default” notice during first-time setup and in settings.
 - Local-only default storage.
-- Clear warning before cloud upload.
+- Clear warning before cloud upload, including exactly which assets, prompts, references, LoRAs, and metadata will leave the local machine.
 - User-controlled asset deletion.
 - No automatic public sharing.
 - Explicit confirmation before uploading private references to remote services.
+- Secret storage for API keys using the OS keychain when available, never plaintext project files.
+- Redaction controls for logs so prompts, private references, and output paths are not exposed in bug reports unless the user opts in.
+- Audit log entries for cloud uploads, deletions, fixed-male retrains, and active-version changes.
 
 ### 8.5 Testing Milestones
+
+Phase acceptance checkpoints:
+
+| Phase | Concrete checkpoint | Pass criteria |
+| --- | --- | --- |
+| Phase 0 | Setup detection | GPU/VRAM, ComfyUI, Ostris, model folders, output folders, and required extensions report pass/warn/fail states. |
+| Phase 0.5 | Base LoRA validation | Imported or trained General Physics/Anatomy Base LoRA can generate identity-neutral validation samples with saved scores. |
+| Phase 1 | Partner + locked male loop | End of Phase 1: successful 20-second looped clip with locked male, one partner LoRA, stable identities, and 80+ review score. |
+| Phase 2 | 3-minute export | Generated clips can be extended, reviewed, assembled, upscaled, and exported as a 3-minute video. |
+| Phase 3 | 15-minute edited timeline | Chat-assisted corrections can produce a 15-minute edited video without losing clip provenance. |
+| Phase 4 | Cloud fallback | A local failure can preserve job state, offload to RunPod, download output, and insert it into the correct timeline slot. |
+| Phase 5 | Audio/lip-sync stretch | Optional audio, ambience, and lip-sync lanes export in sync with the final video. |
 
 Minimum programmatic tests:
 
