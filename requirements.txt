@@ -1,6 +1,6 @@
 # Futa-Vision pinned runtime dependencies.
 # Reference docs/source_document.md and CURSOR_VIBE_CODING_GUIDE.md before changing these pins.
-# Python target: 3.12-3.13 for the first Gradio implementation and local-first backend.
+# Python target: 3.12 for the first Gradio implementation and local-first backend.
 
 # PyTorch stack for NVIDIA CUDA workflows used by ComfyUI/Ostris.
 # If your platform requires a custom wheel index, install with the matching PyTorch index URL first,
@@ -38,9 +38,13 @@ huggingface-hub==1.17.0
 safetensors==0.7.0
 # Pillow and opencv-python support image thumbnails, starter-image handling, neutral dataset assets, and future frame sampling.
 Pillow==11.0.0
-numpy==2.2.6
-opencv-python==4.12.0.88
+# Keep NumPy on the 1.26 LTS line for MoviePy frame processing and legacy NumPy APIs.
+# NumPy 1.26.x does not support Python 3.13, so setup.py intentionally limits runtime installs to Python 3.12.
+numpy==1.26.4
+# OpenCV 4.12.x requires NumPy 2.x; 4.11.0.86 keeps the image/video stack compatible with NumPy 1.26.x.
+opencv-python==4.11.0.86
 # Phase 3.1 timeline trimming/concatenation and playable preview rendering.
+# 2.2.1 is the current stable MoviePy release; pair it with NumPy 1.26.x until upstream NumPy 2.x frame processing is proven stable.
 moviepy==2.2.1
 
 # Development/test dependencies for Phase 0 / Phase 0.5 smoke tests.

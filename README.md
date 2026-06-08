@@ -14,7 +14,7 @@ Futa-Vision now includes a beginner-friendly Phase 5 installer. The installer is
 
 ### Option A — Recommended Windows setup.bat
 
-1. Install **Python 3.12 or newer** from <https://www.python.org/downloads/windows/>. During installation, enable **Add python.exe to PATH**.
+1. Install **Python 3.12** from <https://www.python.org/downloads/windows/>. During installation, enable **Add python.exe to PATH**.
 2. Download or clone this repository, then open the Futa-Vision folder in File Explorer.
 3. Double-click `setup.bat`. Keep the console window open while it:
    - finds Python,
@@ -79,7 +79,7 @@ The current Phase 0 implementation is a runnable Gradio-first skeleton that mirr
 
 ### How to test Phase 0
 
-1. Create and activate a Python 3.12 or 3.13 virtual environment. Python 3.14 is intentionally blocked until the pinned video/UI stack publishes full support for it.
+1. Create and activate a Python 3.12 virtual environment. Python 3.13+ is intentionally blocked because the NumPy 1.26.x/MoviePy/OpenCV compatibility stack is pinned for Python 3.12.
 2. Install runtime dependencies:
 
    ```bash

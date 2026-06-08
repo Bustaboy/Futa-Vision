@@ -171,7 +171,7 @@ Fast-start alternative:
 
 Backend language and runtime:
 
-- Python 3.12+.
+- Python 3.12.
 - Modular orchestrator design.
 - Simple agent loop for generation, scoring, training, extension, review, assembly, and upscale.
 

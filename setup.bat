@@ -25,12 +25,12 @@ echo Tip: If Windows asks for network access, allow Python so Gradio can open lo
 echo.
 
 set "PYTHON_CMD="
-echo [Step 1/4] Looking for a supported Python 3.12 or 3.13 interpreter...
+echo [Step 1/4] Looking for a supported Python 3.12 interpreter...
 where py >nul 2>nul
 if %ERRORLEVEL%==0 (
-    for %%V in (3.13 3.12) do (
+    for %%V in (3.12) do (
         if not defined PYTHON_CMD (
-            py -%%V -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul
+            py -%%V -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (3, 13) else 1)" >nul 2>nul
             if not errorlevel 1 set "PYTHON_CMD=py -%%V"
         )
     )
@@ -39,7 +39,7 @@ if %ERRORLEVEL%==0 (
 if not defined PYTHON_CMD (
     where python >nul 2>nul
     if %ERRORLEVEL%==0 (
-        python -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (3, 14) else 1)" >nul 2>nul
+        python -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (3, 13) else 1)" >nul 2>nul
         if not errorlevel 1 set "PYTHON_CMD=python"
     )
 )
@@ -48,11 +48,11 @@ if not defined PYTHON_CMD (
     echo.
     echo [ERROR] No supported Python interpreter was found on PATH.
     echo.
-    echo Please install Python 3.12 or 3.13 from:
+    echo Please install Python 3.12 from:
     echo   https://www.python.org/downloads/windows/
     echo.
-    echo Python 3.14 is intentionally blocked until the pinned video/UI stack
-    echo publishes full support for it. During installation, check
+    echo Python 3.13+ is intentionally blocked because the pinned NumPy 1.26.x,
+    echo MoviePy, and OpenCV compatibility stack targets Python 3.12. During installation, check
     echo "Add python.exe to PATH".
     echo After installing Python, close this window and run setup.bat again.
     echo.

@@ -94,7 +94,7 @@ Phase 0 proves the product architecture: Futa-Vision is a cohesive director work
 
 ### Dependencies
 
-- Python 3.12+ environment.
+- Python 3.12 environment.
 - Current Gradio UI.
 - Existing test suite.
 - MVP modules for scoring, training, library, video assembly, timeline, chat parsing, regeneration, cloud, and export.
