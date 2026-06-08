@@ -334,6 +334,7 @@ def run_video_generation_pipeline(
     duration_seconds: int,
     target_duration: int,
     cloud_mode: str,
+    cloud_upload_confirmed: bool,
     timeline_state_json: str | None = None,
     progress: gr.Progress = gr.Progress(track_tqdm=True),
 ) -> tuple[str, str, str | None, str | None]:
@@ -353,6 +354,7 @@ def run_video_generation_pipeline(
             cloud_mode=cloud_mode if cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto",
             timeline_state_json=timeline_state_json,
             progress=progress,
+            cloud_upload_confirmed=cloud_upload_confirmed,
         )
     except Exception as exc:  # noqa: BLE001 - UI boundary returns friendly errors.
         error_payload = {"status": "error", "error": str(exc), "scene_config": scene_config, "cloud_mode": cloud_mode}
@@ -703,6 +705,10 @@ def build_ui() -> gr.Blocks:
                     duration = gr.Slider(5, 10, value=8, step=1, label="Short clip duration seconds")
                     target_duration = gr.Slider(10, 60, value=20, step=1, label="Smart-loop target seconds")
                 cloud_mode = gr.Radio(hardware_check.CLOUD_MODE_OPTIONS, value=hardware_check.DEFAULT_CLOUD_MODE, label="Cloud mode (Local / Cloud / Auto)")
+                cloud_upload_confirmed = gr.Checkbox(
+                    label="I reviewed the cloud manifest/privacy notice and approve uploading listed workflow assets when a remote worker URL is configured.",
+                    value=False,
+                )
                 generation_cloud_status = gr.Markdown(cloud_status_for_mode(hardware_check.DEFAULT_CLOUD_MODE))
                 cloud_mode.change(cloud_status_for_mode, inputs=cloud_mode, outputs=generation_cloud_status)
                 with gr.Row():
@@ -722,7 +728,7 @@ def build_ui() -> gr.Blocks:
                 timeline_components = timeline.build_timeline_editor(initial_interactive=initial_interactive)
                 generate_video.click(
                     run_video_generation_pipeline,
-                    inputs=[scene_prompt, selected_partners, scene_type, pipeline, duration, target_duration, cloud_mode, timeline_components["state_json"]],
+                    inputs=[scene_prompt, selected_partners, scene_type, pipeline, duration, target_duration, cloud_mode, cloud_upload_confirmed, timeline_components["state_json"]],
                     outputs=[plan_output, pipeline_json, final_video_file, timeline_components["state_json"]],
                 )
                 gr.Markdown(

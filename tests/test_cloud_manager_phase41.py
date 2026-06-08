@@ -236,3 +236,95 @@ def test_cloud_requested_without_credentials_runs_local_fallback_pipeline(tmp_pa
     assert local_result.status == "complete"
     assert decision["execution"] == "local_fallback"
     assert Path(local_result.final_video["artifact_path"]).exists()
+
+
+def test_auto_mode_offloads_wan_generation_on_low_free_vram() -> None:
+    low_free = _report(cuda=True, vram=8.0)
+    low_free.gpu.free_vram_gb = 1.5
+    decision = cloud_manager.decide_execution_mode(
+        "Auto",
+        "generation",
+        hardware_report=low_free,
+        cloud_status=cloud_manager.CloudStatus(True, "Cloud", "configured"),
+        workflow_payload={"pipeline": "Wan for physics", "target_duration": 35},
+    )
+
+    assert decision["execution"] == "cloud"
+    assert decision["complexity"]["heavy"] is True
+    assert "Wan physics" in decision["reason"]
+
+
+def test_package_workflow_redacts_secrets_and_records_retry_policy(tmp_path: Path) -> None:
+    package = cloud_manager.package_workflow(
+        {
+            "scene_prompt": "test",
+            "job_id": "secret_job",
+            "api_key": "should-not-leak",
+            "nested": {"authorization": "bearer secret"},
+        },
+        task_type="generation",
+        output_dir=tmp_path / "cloud",
+    )
+
+    manifest = json.loads(Path(package["manifest_path"]).read_text())
+    assert manifest["workflow_payload"]["api_key"] == "***"
+    assert manifest["workflow_payload"]["nested"]["authorization"] == "***"
+    assert manifest["retry_policy"]["batch_size"] == 1
+    assert manifest["retry_policy"]["preserve_prompts_seeds_loras_and_timeline_slot"] is True
+    assert manifest["state_history"][0]["state"] == "queued"
+
+
+def test_upload_requires_explicit_confirmation_when_worker_url_configured(tmp_path: Path) -> None:
+    package = cloud_manager.package_workflow(
+        {"scene_prompt": "test", "job_id": "confirm_job"},
+        task_type="generation",
+        output_dir=tmp_path / "cloud",
+    )
+    config = cloud_manager.RunPodConfig(
+        api_key_present=True,
+        api_key="secret",
+        upload_url="https://worker.example/upload",
+        require_upload_confirmation=True,
+        upload_confirmed=False,
+    )
+
+    with pytest.raises(cloud_manager.CloudSafetyError, match="requires explicit confirmation"):
+        cloud_manager.upload_workflow(package["manifest_path"], config=config)
+
+
+def test_validate_workflow_manifest_reports_missing_assets(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.mp4"
+    manifest = {
+        "schema_version": cloud_manager.CLOUD_SCHEMA_VERSION,
+        "job_id": "bad_manifest",
+        "task_type": "generation",
+        "workflow_payload": {},
+        "assets": [str(missing)],
+        "privacy_notice": {"requires_explicit_user_confirmation": True},
+        "expected_result": {},
+    }
+
+    errors = cloud_manager.validate_workflow_manifest(manifest)
+
+    assert any("Asset does not exist" in error for error in errors)
+
+
+def test_download_result_warns_for_unsupported_extension(tmp_path: Path) -> None:
+    source = tmp_path / "remote_result.txt"
+    source.write_text("not a video", encoding="utf-8")
+    package = cloud_manager.package_workflow(
+        {"scene_prompt": "test", "job_id": "unsupported_result"},
+        task_type="generation",
+        output_dir=tmp_path / "cloud",
+    )
+
+    result = cloud_manager.download_result_and_import_timeline(
+        result_source=source,
+        workflow_manifest_path=package["manifest_path"],
+        timeline_state_json=timeline.empty_timeline_state_json(),
+        destination_dir=tmp_path / "downloads",
+    )
+
+    assert result.status == "complete"
+    assert any("Unsupported result extension" in warning for warning in result.warnings)
+    assert any(item["state"] == "scoring" for item in result.state_history)
