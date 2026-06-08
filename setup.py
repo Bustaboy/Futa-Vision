@@ -24,7 +24,7 @@ except ImportError:  # Allows `python setup.py detect` in minimal bootstrap envi
 PROJECT_NAME = "futa-vision"
 ROOT = Path(__file__).resolve().parent
 MIN_PYTHON = (3, 12)
-MAX_PYTHON_EXCLUSIVE = (3, 14)
+MAX_PYTHON_EXCLUSIVE = (3, 13)
 PY_MODULES = [
     "chat_parser",
     "cloud_manager",
@@ -57,11 +57,12 @@ def is_supported_python(version_info: tuple[int, int] | None = None) -> bool:
 def supported_python_message() -> str:
     """Describe the supported Python window and the active interpreter."""
 
-    return (
-        f"Futa-Vision requires Python {_format_version(MIN_PYTHON)} through "
-        f"{MAX_PYTHON_EXCLUSIVE[0]}.{MAX_PYTHON_EXCLUSIVE[1] - 1}; "
-        f"current interpreter is {platform.python_version()}."
-    )
+    max_supported = (MAX_PYTHON_EXCLUSIVE[0], MAX_PYTHON_EXCLUSIVE[1] - 1)
+    if MIN_PYTHON == max_supported:
+        supported_window = f"Python {_format_version(MIN_PYTHON)}"
+    else:
+        supported_window = f"Python {_format_version(MIN_PYTHON)} through {_format_version(max_supported)}"
+    return f"Futa-Vision requires {supported_window}; current interpreter is {platform.python_version()}."
 
 
 def ensure_supported_python() -> None:
@@ -285,7 +286,7 @@ def run_setuptools_setup() -> None:
         name=PROJECT_NAME,
         version="0.1.0",
         description="Local-first Gradio skeleton for the Futa-Vision AI video director workflow.",
-        python_requires=">=3.12,<3.14",
+        python_requires=">=3.12,<3.13",
         py_modules=PY_MODULES,
         packages=find_packages(exclude=("docs", "tests")),
         install_requires=read_requirements(),
