@@ -1,0 +1,66 @@
+{
+  "schema_version": "phase5.installer_manifest.v1",
+  "hardware_profile": {
+    "selected": "low_vram_8gb",
+    "label": "RTX 4070 / 8GB VRAM safe defaults",
+    "resolution": "1280x720 local generation, 1920x1080 export/upscale",
+    "batch_size": 1,
+    "precision": "FP8/GGUF/quantized where supported"
+  },
+  "detected_paths": {
+    "ostris": null,
+    "comfyui": null,
+    "pinokio": null
+  },
+  "comfyui": {
+    "required_nodes": {
+      "ComfyUI-Manager": "unknown",
+      "IPAdapter Plus": "unknown",
+      "AnimateDiff-Evolved": "unknown",
+      "ComfyUI-WanVideoWrapper": "unknown",
+      "ComfyUI-LTXVideo": "unknown",
+      "ComfyUI-Impact-Pack": "unknown",
+      "ComfyUI-Advanced-ControlNet": "unknown",
+      "LayerDiffuse": "unknown"
+    },
+    "recommended_models": {
+      "sdxl_or_flux_checkpoint": "missing",
+      "wan_video_model": "missing",
+      "ltx_video_model": "missing",
+      "ipadapter_faceid": "missing",
+      "controlnet_models": "missing",
+      "vae": "missing",
+      "upscaler": "missing"
+    }
+  },
+  "folders": {
+    "cache": "cache",
+    "outputs": "outputs",
+    "logs": "logs",
+    "models": "models"
+  },
+  "sample_tests": {
+    "status": "not_run",
+    "image_test": {
+      "status": "not_run",
+      "path": null
+    },
+    "clip_test": {
+      "status": "not_run",
+      "path": null
+    },
+    "summary": "Installer sample tests have not been run yet."
+  },
+  "runpod": {
+    "ready": false,
+    "api_key_present": false,
+    "pod_id": null,
+    "last_check": null,
+    "notes": "Optional. Local RTX 4070 8GB mode is the default; use RunPod for long Wan jobs or high-resolution upscales."
+  },
+  "last_successful_run": null,
+  "overall_status": "first_run_required",
+  "warnings": [
+    "Run setup.bat or click Run Installer / Repair Installation from Settings to verify paths, sample outputs, and dependencies."
+  ]
+}

@@ -48,6 +48,7 @@ MIN_CACHE_FREE_GB = 100.0
 
 SETTINGS_DIR = ROOT / "settings"
 INSTALLER_STATE_PATH = SETTINGS_DIR / "installer_state.json"
+INSTALLER_MANIFEST_PATH = SETTINGS_DIR / "installer_manifest.json"
 APP_SETTINGS_PATH = SETTINGS_DIR / "futa_vision_settings.json"
 ENV_PATH = ROOT / ".env"
 ENV_EXAMPLE_PATH = ROOT / ".env.example"
@@ -929,6 +930,97 @@ def ensure_env_example() -> None:
     LOGGER.info("Created .env.example at %s", ENV_EXAMPLE_PATH)
 
 
+def manifest_profile_name(profile: str) -> str:
+    """Map installer hardware profile values to user-facing manifest profile names."""
+
+    return "low_vram_8gb" if profile == HardwareProfile.LOCAL_LOW_VRAM.value else profile
+
+
+def write_installer_manifest(
+    state: InstallerState,
+    report: HardwareReport,
+    detections: dict[str, list[InstallCandidate]],
+    sample_warnings: list[str] | None = None,
+) -> None:
+    """Write the Phase 5 manifest consumed by main.py's Settings tab."""
+
+    paths = load_env_file()
+    sample_warnings = sample_warnings or []
+    detected = {
+        "ostris": str(detections["ostris"][0].path) if detections.get("ostris") else paths.get("OSTRIS_PATH"),
+        "comfyui": str(detections["comfyui"][0].path) if detections.get("comfyui") else paths.get("COMFYUI_PATH"),
+        "pinokio": str(detections["pinokio"][0].path) if detections.get("pinokio") else None,
+    }
+    image_ok = bool(state.sample_image_path and Path(state.sample_image_path).exists())
+    clip_ok = bool(state.sample_clip_path and Path(state.sample_clip_path).exists())
+    sample_status = "passed" if image_ok and clip_ok and not sample_warnings else "warning" if image_ok or clip_ok else "not_run"
+    runpod_ready = bool(state.runpod_configured)
+    missing_required = []
+    if not detected["ostris"]:
+        missing_required.append("Ostris AI Toolkit path not detected; set OSTRIS_PATH if training is needed.")
+    if not detected["comfyui"]:
+        missing_required.append("ComfyUI path not detected; set COMFYUI_PATH before video generation.")
+    warnings = [*state.warnings, *missing_required]
+    overall_status = "ready" if not missing_required and state.adult_confirmed and state.privacy_acknowledged else "repair_required"
+    if not state.adult_confirmed or not state.privacy_acknowledged:
+        overall_status = "first_run_required"
+    manifest = {
+        "schema_version": "phase5.installer_manifest.v1",
+        "hardware_profile": {
+            "selected": manifest_profile_name(state.hardware_profile),
+            "label": "RTX 4070 / 8GB VRAM safe defaults" if state.hardware_profile == HardwareProfile.LOCAL_LOW_VRAM.value else state.hardware_profile.replace("_", " ").title(),
+            "resolution": report.profile_settings.get("resolution", "1280x720 local generation"),
+            "batch_size": int(report.profile_settings.get("batch_size", "1").split("-")[0]),
+            "precision": report.profile_settings.get("precision", "FP8/GGUF/quantized where supported"),
+        },
+        "detected_paths": detected,
+        "comfyui": {
+            "required_nodes": {
+                "ComfyUI-Manager": "unknown",
+                "IPAdapter Plus": "unknown",
+                "AnimateDiff-Evolved": "unknown",
+                "ComfyUI-WanVideoWrapper": "unknown",
+                "ComfyUI-LTXVideo": "unknown",
+                "ComfyUI-Impact-Pack": "unknown",
+                "ComfyUI-Advanced-ControlNet": "unknown",
+                "LayerDiffuse": "unknown",
+            },
+            "recommended_models": {
+                "sdxl_or_flux_checkpoint": "unknown",
+                "wan_video_model": "unknown",
+                "ltx_video_model": "unknown",
+                "ipadapter_faceid": "unknown",
+                "controlnet_models": "unknown",
+                "vae": "unknown",
+                "upscaler": "unknown",
+            },
+        },
+        "folders": {
+            "cache": paths.get("FUTA_VISION_CACHE_DIR", "cache"),
+            "outputs": paths.get("FUTA_VISION_OUTPUTS_DIR", "outputs"),
+            "logs": paths.get("FUTA_VISION_LOGS_DIR", "logs"),
+            "models": "models",
+        },
+        "sample_tests": {
+            "status": sample_status,
+            "image_test": {"status": "passed" if image_ok else "not_run", "path": state.sample_image_path},
+            "clip_test": {"status": "passed" if clip_ok else "not_run", "path": state.sample_clip_path},
+            "summary": "Sample image and clip write tests passed." if sample_status == "passed" else "Sample tests need review; see installer warnings/log.",
+        },
+        "runpod": {
+            "ready": runpod_ready,
+            "api_key_present": runpod_ready,
+            "pod_id": paths.get("RUNPOD_POD_ID"),
+            "last_check": now_iso(),
+            "notes": "Configured for optional cloud offload." if runpod_ready else "Optional. Use local RTX 4070 8GB mode by default; configure RunPod for long Wan jobs or high-resolution upscales.",
+        },
+        "last_successful_run": state.updated_at,
+        "overall_status": overall_status,
+        "warnings": warnings,
+    }
+    write_json(INSTALLER_MANIFEST_PATH, manifest)
+
+
 def ensure_env_defaults(detections: dict[str, list[InstallCandidate]], profile: HardwareProfile, runpod_key: str | None = None) -> None:
     """Write non-destructive .env defaults and detected engine paths."""
 
@@ -1496,6 +1588,7 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
         warnings=all_warnings,
     )
     write_json(INSTALLER_STATE_PATH, json_safe(state))
+    write_installer_manifest(state, report, detections, sample_warnings)
     CONSOLE.print(Panel(
         "[bold green]Installation successful! You can now launch Futa-Vision.[/bold green]\n"
         "Next steps:\n"
@@ -1647,6 +1740,7 @@ def command_install(args: argparse.Namespace) -> int:
             "Installation successful! You can now launch Futa-Vision.",
             "Next step: run `python main.py` or use --launch to start automatically.",
             f"Installer state: {INSTALLER_STATE_PATH}",
+            f"Installer manifest: {INSTALLER_MANIFEST_PATH}",
             f"App settings: {APP_SETTINGS_PATH}",
             f"Environment file: {ENV_PATH}",
             f"Installer log: {LOG_PATH}",

@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,6 +37,9 @@ from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, score_partn
 APP_TITLE = "Futa-Vision Director"
 SETTINGS_SCHEMA_VERSION = "phase4.2.settings.v1"
 DEFAULT_SETTINGS_PATH = Path("settings/futa_vision_settings.json")
+# Phase 5 Installer integration: persistent setup manifest consumed by the Gradio Settings tab.
+INSTALLER_MANIFEST_PATH = Path("settings/installer_manifest.json")
+INSTALLER_LOG_PATH = Path("logs/installer.log")
 ADULT_CONFIRMATION_ENV = "FUTA_VISION_REQUIRE_ADULT_CONFIRMATION"
 
 
@@ -68,6 +73,180 @@ class CharacterRecord:
     created_at: str
     tags: list[str] = field(default_factory=list)
     notes: str = "Reusable partner LoRA."
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Installer integration helpers
+# ---------------------------------------------------------------------------
+
+def default_installer_manifest() -> dict[str, Any]:
+    """Return safe first-run defaults for settings/installer_manifest.json."""
+
+    return {
+        "schema_version": "phase5.installer_manifest.v1",
+        "hardware_profile": {
+            "selected": "low_vram_8gb",
+            "label": "RTX 4070 / 8GB VRAM safe defaults",
+            "resolution": "1280x720 local generation, 1920x1080 export/upscale",
+            "batch_size": 1,
+            "precision": "FP8/GGUF/quantized where supported",
+        },
+        "detected_paths": {
+            "ostris": None,
+            "comfyui": None,
+            "pinokio": None,
+        },
+        "comfyui": {
+            "required_nodes": {
+                "ComfyUI-Manager": "unknown",
+                "IPAdapter Plus": "unknown",
+                "AnimateDiff-Evolved": "unknown",
+                "ComfyUI-WanVideoWrapper": "unknown",
+                "ComfyUI-LTXVideo": "unknown",
+                "ComfyUI-Impact-Pack": "unknown",
+                "ComfyUI-Advanced-ControlNet": "unknown",
+                "LayerDiffuse": "unknown",
+            },
+            "recommended_models": {
+                "sdxl_or_flux_checkpoint": "missing",
+                "wan_video_model": "missing",
+                "ltx_video_model": "missing",
+                "ipadapter_faceid": "missing",
+                "controlnet_models": "missing",
+                "vae": "missing",
+                "upscaler": "missing",
+            },
+        },
+        "folders": {
+            "cache": "cache",
+            "outputs": "outputs",
+            "logs": "logs",
+            "models": "models",
+        },
+        "sample_tests": {
+            "status": "not_run",
+            "image_test": {"status": "not_run", "path": None},
+            "clip_test": {"status": "not_run", "path": None},
+            "summary": "Installer sample tests have not been run yet.",
+        },
+        "runpod": {
+            "ready": False,
+            "api_key_present": False,
+            "pod_id": None,
+            "last_check": None,
+            "notes": "Optional. Local RTX 4070 8GB mode is the default; use RunPod for long Wan jobs or high-resolution upscales.",
+        },
+        "last_successful_run": None,
+        "overall_status": "first_run_required",
+        "warnings": [
+            "Run setup.bat or click Run Installer / Repair Installation from Settings to verify paths, sample outputs, and dependencies."
+        ],
+    }
+
+
+def load_installer_manifest() -> dict[str, Any]:
+    """Load installer_manifest.json with robust defaults for first-run UI display."""
+
+    defaults = default_installer_manifest()
+    if not INSTALLER_MANIFEST_PATH.exists():
+        return defaults
+    try:
+        payload = json.loads(INSTALLER_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        defaults["overall_status"] = "repair_required"
+        defaults["warnings"] = [f"Installer manifest is corrupt: {INSTALLER_MANIFEST_PATH}"]
+        return defaults
+    for key, value in payload.items():
+        if isinstance(value, dict) and isinstance(defaults.get(key), dict):
+            defaults[key].update(value)
+        else:
+            defaults[key] = value
+    return defaults
+
+
+def installer_status_markdown() -> str:
+    """Render Phase 5 installer state for the Settings tab."""
+
+    manifest = load_installer_manifest()
+    paths = manifest.get("detected_paths", {})
+    folders = manifest.get("folders", {})
+    samples = manifest.get("sample_tests", {})
+    runpod = manifest.get("runpod", {})
+    warnings = manifest.get("warnings") or []
+    status = manifest.get("overall_status", "unknown")
+    tone = "success" if status in {"ready", "complete"} else "warning"
+    warning_lines = "\n".join(f"- {warning}" for warning in warnings) if warnings else "- No installer warnings recorded."
+    required_nodes = manifest.get("comfyui", {}).get("required_nodes", {})
+    missing_nodes = [name for name, node_status in required_nodes.items() if str(node_status).lower() not in {"installed", "ok", "ready", "present"}]
+    node_line = "All required/recommended nodes marked ready." if not missing_nodes else ", ".join(missing_nodes[:6])
+    return (
+        "## Phase 5 Installer Status\n"
+        f"{status_badge(str(status).replace('_', ' ').title(), tone)}\n\n"
+        f"- Last successful installer run: `{manifest.get('last_successful_run') or 'never'}`\n"
+        f"- Hardware profile: `{manifest.get('hardware_profile', {}).get('selected', 'unknown')}` — {manifest.get('hardware_profile', {}).get('label', 'not selected')}\n"
+        f"- Ostris path: `{paths.get('ostris') or 'not detected'}`\n"
+        f"- ComfyUI path: `{paths.get('comfyui') or 'not detected'}`\n"
+        f"- Pinokio path: `{paths.get('pinokio') or 'not detected / optional'}`\n"
+        f"- Cache folder: `{folders.get('cache', 'cache')}`\n"
+        f"- Output folder: `{folders.get('outputs', 'outputs')}`\n"
+        f"- Sample tests: `{samples.get('status', 'not_run')}` — {samples.get('summary', 'No sample summary available.')}\n"
+        f"- RunPod ready: `{runpod.get('ready', False)}` (API key present: `{runpod.get('api_key_present', False)}`)\n"
+        f"- ComfyUI nodes needing attention: {node_line}\n"
+        f"- Installer log: [`{INSTALLER_LOG_PATH}`](file/{INSTALLER_LOG_PATH})\n\n"
+        "### Warnings / next actions\n"
+        f"{warning_lines}"
+    )
+
+
+def installation_needs_attention() -> bool:
+    """Return True when first-run setup or repair should be prominent in the UI."""
+
+    manifest = load_installer_manifest()
+    return (
+        not INSTALLER_MANIFEST_PATH.exists()
+        or manifest.get("overall_status") not in {"ready", "complete"}
+        or not manifest.get("last_successful_run")
+    )
+
+
+def run_installer_or_repair(adult_confirmed: bool) -> tuple[str, str]:
+    """Run installer.py from the Settings tab and refresh installer status."""
+
+    command = [sys.executable, "installer.py"]
+    if installation_needs_attention():
+        command += ["--non-interactive", "--privacy-ack", "--profile", "local_low_vram"]
+        if adult_confirmed or not adult_confirmation_required():
+            command.append("--accept-adult")
+        command.append("install")
+    else:
+        command += ["--non-interactive", "repair", "--all"]
+
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - Gradio boundary must stay user-friendly.
+        return f"## ❌ Installer could not start\n`{exc}`", installer_status_markdown()
+
+    output = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
+    if len(output) > 5000:
+        output = output[-5000:]
+    icon = "✅" if completed.returncode == 0 else "❌"
+    summary = (
+        f"## {icon} Installer command finished\n"
+        f"- Command: `{' '.join(command)}`\n"
+        f"- Exit code: `{completed.returncode}`\n"
+        f"- Log: `{INSTALLER_LOG_PATH}`\n\n"
+        "```text\n"
+        f"{output or 'No console output captured.'}\n"
+        "```"
+    )
+    return summary, installer_status_markdown()
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -693,6 +872,11 @@ def settings_markdown() -> str:
     """Render current app settings as Markdown for the Settings tab."""
 
     settings = load_app_settings()
+    installer_prompt = (
+        "\n\n> ⚠️ First-run setup or repair is recommended. Use the **Run Installer / Repair Installation** button below."
+        if installation_needs_attention()
+        else ""
+    )
     return (
         "## Current Phase 4.2 Settings\n"
         f"{app_polish_status()}\n\n"
@@ -703,6 +887,7 @@ def settings_markdown() -> str:
         f"- Adult gate required: `{settings['safety']['adult_gate_required']}`\n"
         f"- UI theme: `{settings['ui']['theme']}`\n"
         "- Export path: `outputs/final_videos` with MP4 sidecar metadata."
+        f"{installer_prompt}"
     )
 
 
@@ -817,6 +1002,19 @@ def build_ui() -> gr.Blocks:
                     "Settings are stored locally in `settings/futa_vision_settings.json`; cloud uploads still require per-job approval."
                 )
                 settings_status = gr.Markdown(settings_markdown())
+                # Phase 5 Installer integration: visible manifest status plus one-click repair.
+                installer_status = gr.Markdown(installer_status_markdown())
+                with gr.Row():
+                    run_installer_button = gr.Button("🛠️ Run Installer / Repair Installation", variant="primary")
+                    refresh_installer_button = gr.Button("Refresh Installer Status", variant="secondary")
+                installer_console = gr.Markdown()
+                run_installer_button.click(
+                    run_installer_or_repair,
+                    inputs=adult_confirmed,
+                    outputs=[installer_console, installer_status],
+                    show_progress="full",
+                )
+                refresh_installer_button.click(installer_status_markdown, outputs=installer_status)
                 settings_defaults = load_app_settings()
                 with gr.Accordion("Cloud preferences", open=True):
                     settings_runpod_key = gr.Textbox(
