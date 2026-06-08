@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 import chat_parser
 import cloud_manager
+import exporter
 import hardware_check
 import library as character_library
 import regeneration_engine
@@ -141,6 +142,7 @@ def ensure_storage(paths: AppPaths) -> None:
         paths.outputs_dir / "clips",
         paths.outputs_dir / "extended_clips",
         paths.outputs_dir / "final_videos",
+        paths.outputs_dir / "final_videos" / "work",
         paths.outputs_dir / "timelines",
         paths.outputs_dir / "timelines" / "previews",
         paths.outputs_dir / "timelines" / "thumbnails",
@@ -185,7 +187,7 @@ def setup_status() -> str:
         "- Phase 1: SQLite character library, searchable thumbnails, scoring-to-library registration, and scene load plans.",
         "- TODO Phase 1: replace placeholder partner LoRA staging with real Ostris partner datasets/jobs once starter image generation lands.",
         "- TODO Phase 2: add ComfyUI extension checks for IPAdapter, AnimateDiff, Wan extender, LTX, Regional ControlNets, and LayerDiffuse plus RunPod preflight manifests.",
-        "- TODO Phase 2: implement video pipeline submission, clip auto-review, extension, timeline assembly, and final upscaling.",
+        "- Phase 4.2: final export now writes MP4 artifacts with metadata sidecars, optional audio, settings capture, and SeedVR/RTX/Nomos upscale policy.",
     ]
     return "\n".join(lines)
 
@@ -545,6 +547,63 @@ def disconnect_runpod_pod() -> str:
     return "## RunPod disconnect requested\n```json\n" + json.dumps(status.to_dict(), indent=2) + "\n```"
 
 
+def settings_overview_markdown(
+    cloud_mode: str,
+    performance_preset: str,
+    upscale_engine: str,
+    theme: str,
+    age_gate_finalized: bool,
+) -> str:
+    """Render a final-polish settings summary with status badges."""
+
+    selected_mode = cloud_mode if cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else hardware_check.DEFAULT_CLOUD_MODE
+    preset = exporter.SUPPORTED_EXPORT_PRESETS.get(performance_preset, exporter.SUPPORTED_EXPORT_PRESETS["4070 Safe 720p → 1080p"])
+    gate_badge = "✅ finalized" if age_gate_finalized else "🔒 required before final export"
+    return (
+        "## Phase 4.2 Settings Summary\n"
+        f"- Cloud preference: `{selected_mode}`; RunPod API keys are accepted for this session only and are not written to project files.\n"
+        f"- Performance preset: `{performance_preset}` → render `{preset['render_resolution']}`, export/upscale `{preset['target_resolution']}`, VRAM safety `{preset['vram_safety']}`.\n"
+        f"- Upscale engine: `{upscale_engine}`.\n"
+        f"- UI theme preference: `{theme}`. Restart Gradio to fully apply a theme change.\n"
+        f"- NSFW age gate: {gate_badge}.\n"
+        "- Local-first privacy remains enabled; cloud upload requires explicit confirmation in Generate/Export flows."
+    )
+
+
+def run_final_export(
+    timeline_state_json: str,
+    title: str,
+    performance_preset: str,
+    upscale_engine: str,
+    target_resolution: str,
+    include_audio: bool,
+    audio_track_path: str | None,
+    cloud_mode: str,
+    runpod_api_key: str,
+    theme: str,
+    age_gate_finalized: bool,
+    metadata_notes: str,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[str, str, str | None]:
+    """Run the Phase 4.2 final export adapter from the Settings tab."""
+
+    return exporter.gradio_export_timeline(
+        timeline_state_json=timeline_state_json,
+        title=title,
+        performance_preset=performance_preset,
+        upscale_engine=upscale_engine,
+        target_resolution=target_resolution,
+        include_audio=include_audio,
+        audio_track_path=audio_track_path,
+        cloud_mode=cloud_mode,
+        runpod_api_key=runpod_api_key,
+        theme=theme,
+        age_gate_confirmed=age_gate_finalized,
+        metadata_notes=metadata_notes,
+        progress=progress,
+    )
+
+
 def phase0_test_markdown() -> str:
     """Return README-equivalent quick test instructions inside the app."""
 
@@ -569,7 +628,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 3.2: LLM chat parser previews structured timeline edit intents."
+            "Phase 4.2: Final Polish + Export with settings, metadata, optional audio, and 1080p+ upscale policy."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
@@ -791,11 +850,85 @@ def build_ui() -> gr.Blocks:
                     show_progress="full",
                 )
 
+            with gr.Tab("⚙️ Settings & Export", id="Settings & Export", visible=initial_interactive) as settings_tab:
+                gr.Markdown(
+                    "Phase 4.2 final polish: cloud preferences, 4070-safe performance presets, finalized NSFW disclaimer controls, "
+                    "theme preference, and final MP4 export with metadata + optional audio + 1080p+ upscale policy."
+                )
+                with gr.Row():
+                    settings_cloud_mode = gr.Radio(
+                        hardware_check.CLOUD_MODE_OPTIONS,
+                        value=hardware_check.DEFAULT_CLOUD_MODE,
+                        label="Default cloud mode",
+                    )
+                    settings_runpod_api_key = gr.Textbox(
+                        label="RunPod API key (session only; not saved)",
+                        type="password",
+                        placeholder="Paste only when exporting/offloading this session",
+                    )
+                with gr.Row():
+                    performance_preset = gr.Dropdown(
+                        list(exporter.SUPPORTED_EXPORT_PRESETS),
+                        value="4070 Safe 720p → 1080p",
+                        label="Performance preset",
+                    )
+                    upscale_engine = gr.Radio(exporter.SUPPORTED_UPSCALERS, value="SeedVR 2.5", label="Final upscale engine")
+                    target_resolution = gr.Dropdown(["1920x1080", "2560x1440", "3840x2160"], value="1920x1080", label="Export target resolution")
+                with gr.Row():
+                    ui_theme = gr.Dropdown(["Soft", "Default", "Glass", "Monochrome"], value="Soft", label="General UI / theme preference")
+                    age_gate_finalized = gr.Checkbox(
+                        label="I finalize the NSFW age gate for export: adult-only, lawful, consensual content; no automatic public sharing.",
+                        value=initial_confirmed,
+                        interactive=initial_interactive,
+                    )
+                settings_summary = gr.Markdown()
+                refresh_settings_summary = gr.Button("Refresh Settings Summary", variant="secondary", interactive=initial_interactive)
+                for trigger in (settings_cloud_mode.change, performance_preset.change, upscale_engine.change, ui_theme.change, age_gate_finalized.change, refresh_settings_summary.click):
+                    trigger(
+                        settings_overview_markdown,
+                        inputs=[settings_cloud_mode, performance_preset, upscale_engine, ui_theme, age_gate_finalized],
+                        outputs=settings_summary,
+                    )
+                demo.load(
+                    lambda: settings_overview_markdown(hardware_check.DEFAULT_CLOUD_MODE, "4070 Safe 720p → 1080p", "SeedVR 2.5", "Soft", initial_confirmed),
+                    outputs=settings_summary,
+                )
+
+                gr.Markdown("## Final Export")
+                export_title = gr.Textbox(label="Export title", value="Futa-Vision final export")
+                include_audio = gr.Checkbox(label="Mux optional basic audio track", value=False)
+                audio_track = gr.Audio(label="Optional audio track", type="filepath")
+                metadata_notes = gr.Textbox(label="Export notes / release metadata", lines=3, placeholder="Prompt/settings notes for the JSON sidecar")
+                export_final_button = gr.Button("Export Final MP4", variant="primary", interactive=initial_interactive)
+                export_status = gr.Markdown()
+                export_json = gr.Code(label="Final export metadata", language="json")
+                exported_video_file = gr.File(label="Final MP4")
+                export_final_button.click(
+                    run_final_export,
+                    inputs=[
+                        timeline_components["state_json"],
+                        export_title,
+                        performance_preset,
+                        upscale_engine,
+                        target_resolution,
+                        include_audio,
+                        audio_track,
+                        settings_cloud_mode,
+                        settings_runpod_api_key,
+                        ui_theme,
+                        age_gate_finalized,
+                        metadata_notes,
+                    ],
+                    outputs=[export_status, export_json, exported_video_file],
+                    show_progress="full",
+                )
+
         def _gate_update(confirmed: bool) -> list[Any]:
             unlocked = confirmed or not adult_confirmation_required()
             return [
                 adult_confirmation_status(confirmed),
                 gr.update(visible=not unlocked),
+                gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
@@ -811,6 +944,9 @@ def build_ui() -> gr.Blocks:
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
+                gr.update(interactive=unlocked),
+                gr.update(value=confirmed, interactive=unlocked),
+                gr.update(interactive=unlocked),
                 *[gr.update(interactive=unlocked) for _ in timeline_components["gated_controls"]],
             ]
 
@@ -825,6 +961,7 @@ def build_ui() -> gr.Blocks:
                 partner_tab,
                 generate_tab,
                 timeline_tab,
+                settings_tab,
                 app_tabs,
                 start_training,
                 use_scene_button,
@@ -835,6 +972,9 @@ def build_ui() -> gr.Blocks:
                 preview_characters,
                 chat_button,
                 apply_regeneration_button,
+                refresh_settings_summary,
+                age_gate_finalized,
+                export_final_button,
                 *timeline_components["gated_controls"],
             ],
         )
