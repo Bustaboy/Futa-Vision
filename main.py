@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 import chat_parser
 import cloud_manager
+import exporter
 import hardware_check
 import library as character_library
 import regeneration_engine
@@ -32,6 +33,8 @@ from hardware_check import report_to_markdown
 from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, score_partner_candidate, weighted_score
 
 APP_TITLE = "Futa-Vision Director"
+SETTINGS_SCHEMA_VERSION = "phase4.2.settings.v1"
+DEFAULT_SETTINGS_PATH = Path("settings/futa_vision_settings.json")
 ADULT_CONFIRMATION_ENV = "FUTA_VISION_REQUIRE_ADULT_CONFIRMATION"
 
 
@@ -545,6 +548,193 @@ def disconnect_runpod_pod() -> str:
     return "## RunPod disconnect requested\n```json\n" + json.dumps(status.to_dict(), indent=2) + "\n```"
 
 
+
+def status_badge(label: str, tone: str = "info") -> str:
+    """Render a compact status badge for polished cross-tab feedback."""
+
+    palette = {
+        "success": ("#166534", "#dcfce7", "✅"),
+        "warning": ("#92400e", "#fef3c7", "⚠️"),
+        "error": ("#991b1b", "#fee2e2", "❌"),
+        "info": ("#1d4ed8", "#dbeafe", "ℹ️"),
+        "locked": ("#374151", "#f3f4f6", "🔒"),
+    }
+    color, background, icon = palette.get(tone, palette["info"])
+    return (
+        f"<span style='display:inline-block;padding:0.25rem 0.65rem;border-radius:999px;"
+        f"font-size:0.9rem;font-weight:700;color:{color};background:{background};border:1px solid {color}33;'>"
+        f"{icon} {label}</span>"
+    )
+
+
+def app_polish_status() -> str:
+    """Summarize Phase 4.2 UX readiness across tabs."""
+
+    return " ".join(
+        [
+            status_badge("Phase 4.2 Export Ready", "success"),
+            status_badge("4070 8GB Safe Defaults", "success"),
+            status_badge("Cloud Uploads Require Consent", "warning"),
+        ]
+    )
+
+
+def default_app_settings() -> dict[str, Any]:
+    """Return persisted Settings-tab defaults for local-first use."""
+
+    return {
+        "schema_version": SETTINGS_SCHEMA_VERSION,
+        "updated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "cloud": {
+            "runpod_api_key_present": bool(os.getenv("RUNPOD_API_KEY")),
+            "default_mode": hardware_check.DEFAULT_CLOUD_MODE,
+            "privacy_requires_upload_confirmation": True,
+        },
+        "performance": {
+            "preset": "RTX 4070 8GB Safe — 720p generate + 1080p export",
+            "generation_resolution": "1280x720",
+            "export_resolution": "1920x1080",
+            "vram_safety": True,
+            "oom_fallback": "Retry 960x540, then offer RunPod with explicit confirmation.",
+        },
+        "safety": {
+            "adult_gate_required": adult_confirmation_required(),
+            "lawful_consensual_only": True,
+            "cloud_privacy_notice_finalized": True,
+        },
+        "ui": {
+            "theme": "Soft",
+            "dense_mode": False,
+            "show_advanced_json": True,
+            "status_badges": True,
+        },
+    }
+
+
+def load_app_settings(settings_path: Path | None = None) -> dict[str, Any]:
+    """Load Settings-tab JSON without failing first launch."""
+
+    target_path = settings_path or DEFAULT_SETTINGS_PATH
+    defaults = default_app_settings()
+    if not target_path.exists():
+        return defaults
+    try:
+        payload = json.loads(target_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return defaults | {"warnings": [f"Ignoring corrupt settings file: {target_path}"]}
+    merged = defaults
+    for section in ("cloud", "performance", "safety", "ui"):
+        if isinstance(payload.get(section), dict):
+            merged[section].update(payload[section])
+    merged["updated_at"] = payload.get("updated_at", merged["updated_at"])
+    return merged
+
+
+def save_app_settings(
+    runpod_api_key: str,
+    default_cloud_mode: str,
+    performance_preset: str,
+    vram_safety: bool,
+    require_adult_gate: bool,
+    theme_option: str,
+    dense_mode: bool,
+    show_advanced_json: bool,
+) -> tuple[str, str]:
+    """Persist final Phase 4.2 Settings-tab preferences locally."""
+
+    selected_cloud_mode = default_cloud_mode if default_cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto"
+    normalized_key = (runpod_api_key or "").strip()
+    current = load_app_settings()
+    current["updated_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+    current["cloud"] = {
+        "runpod_api_key_present": bool(normalized_key) or bool(os.getenv("RUNPOD_API_KEY")),
+        "runpod_api_key_hint": "stored in local settings" if normalized_key else "use RUNPOD_API_KEY env var or paste per session",
+        "default_mode": selected_cloud_mode,
+        "privacy_requires_upload_confirmation": True,
+    }
+    current["performance"] = {
+        "preset": performance_preset,
+        "generation_resolution": "1280x720" if "720" in performance_preset else "1280x720 local source with higher final upscale",
+        "export_resolution": "1920x1080" if "1080" in performance_preset or "720" in performance_preset else "2560x1440+ cloud recommended",
+        "vram_safety": bool(vram_safety),
+        "oom_fallback": "Retry 960x540 locally, then ask for RunPod upload confirmation.",
+    }
+    current["safety"] = {
+        "adult_gate_required": bool(require_adult_gate),
+        "lawful_consensual_only": True,
+        "age_gate_finalized": True,
+        "cloud_privacy_notice_finalized": True,
+    }
+    current["ui"] = {
+        "theme": theme_option,
+        "dense_mode": bool(dense_mode),
+        "show_advanced_json": bool(show_advanced_json),
+        "status_badges": True,
+    }
+    if normalized_key:
+        current["cloud"]["runpod_api_key"] = normalized_key
+    DEFAULT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    safe_payload = json.loads(json.dumps(current))
+    if safe_payload.get("cloud", {}).get("runpod_api_key"):
+        safe_payload["cloud"]["runpod_api_key"] = "***redacted***"
+    DEFAULT_SETTINGS_PATH.write_text(json.dumps(current, indent=2, sort_keys=True), encoding="utf-8")
+    summary = (
+        "## ✅ Settings saved\n"
+        f"- Cloud default: `{selected_cloud_mode}`\n"
+        f"- Performance preset: `{performance_preset}`\n"
+        f"- Adult gate required: `{bool(require_adult_gate)}`\n"
+        f"- Theme: `{theme_option}`\n"
+        "- Cloud uploads still require explicit per-job confirmation."
+    )
+    return summary, json.dumps(safe_payload, indent=2, sort_keys=True)
+
+
+def settings_markdown() -> str:
+    """Render current app settings as Markdown for the Settings tab."""
+
+    settings = load_app_settings()
+    return (
+        "## Current Phase 4.2 Settings\n"
+        f"{app_polish_status()}\n\n"
+        f"- Cloud default mode: `{settings['cloud']['default_mode']}`\n"
+        f"- RunPod key present: `{settings['cloud']['runpod_api_key_present']}`\n"
+        f"- Performance: `{settings['performance']['preset']}`\n"
+        f"- VRAM safety: `{settings['performance']['vram_safety']}`\n"
+        f"- Adult gate required: `{settings['safety']['adult_gate_required']}`\n"
+        f"- UI theme: `{settings['ui']['theme']}`\n"
+        "- Export path: `outputs/final_videos` with MP4 sidecar metadata."
+    )
+
+
+def run_final_export(
+    timeline_state_json: str,
+    fallback_clip_paths: str,
+    selected_character_ids: str,
+    project_title: str,
+    scene_prompt: str,
+    audio_path: str | None,
+    include_audio: bool,
+    quality_preset: str,
+    final_upscale_enabled: bool,
+    vram_safety_mode: bool,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[str, str, str | None]:
+    """Launch Phase 4.2 final export from Gradio with friendly error handling."""
+
+    return exporter.gradio_export_final_video(
+        timeline_state_json=timeline_state_json,
+        fallback_clip_paths=fallback_clip_paths,
+        selected_character_ids=selected_character_ids,
+        project_title=project_title,
+        scene_prompt=scene_prompt,
+        audio_path=audio_path,
+        include_audio=include_audio,
+        quality_preset=quality_preset,
+        final_upscale_enabled=final_upscale_enabled,
+        vram_safety_mode=vram_safety_mode,
+        progress=progress,
+    )
+
 def phase0_test_markdown() -> str:
     """Return README-equivalent quick test instructions inside the app."""
 
@@ -569,8 +759,9 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 3.2: LLM chat parser previews structured timeline edit intents."
+            "Phase 4.2: final polish, VRAM-safe export, settings finalization, and cloud-aware UX."
         )
+        gr.HTML(app_polish_status())
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
             f"Gate controlled by `{ADULT_CONFIRMATION_ENV}`. You must be an adult and agree to create only lawful, "
@@ -619,6 +810,63 @@ def build_ui() -> gr.Blocks:
                 refresh_training_defaults.click(training_defaults_markdown, outputs=training_defaults_output)
                 demo.load(training_defaults_markdown, outputs=training_defaults_output)
                 gr.Markdown(phase0_test_markdown())
+
+            with gr.Tab("⚙️ Settings", id="Settings"):
+                gr.Markdown(
+                    "Finalize cloud, performance, safety, and theme preferences for Phase 4.2. "
+                    "Settings are stored locally in `settings/futa_vision_settings.json`; cloud uploads still require per-job approval."
+                )
+                settings_status = gr.Markdown(settings_markdown())
+                settings_defaults = load_app_settings()
+                with gr.Accordion("Cloud preferences", open=True):
+                    settings_runpod_key = gr.Textbox(
+                        label="RunPod API key (local settings / optional)",
+                        type="password",
+                        placeholder="Leave blank to use RUNPOD_API_KEY from .env",
+                    )
+                    settings_cloud_mode = gr.Radio(
+                        hardware_check.CLOUD_MODE_OPTIONS,
+                        value=settings_defaults["cloud"].get("default_mode", hardware_check.DEFAULT_CLOUD_MODE),
+                        label="Default execution mode",
+                    )
+                with gr.Accordion("Performance presets", open=True):
+                    settings_performance_preset = gr.Radio(
+                        [
+                            "RTX 4070 8GB Safe — 720p generate + 1080p export",
+                            "Higher Quality — 720p source + 1440p/Cloud upscale",
+                            "Preview Fast — 720p drafts / minimal cache",
+                        ],
+                        value=settings_defaults["performance"].get("preset", "RTX 4070 8GB Safe — 720p generate + 1080p export"),
+                        label="Performance preset",
+                    )
+                    settings_vram_safety = gr.Checkbox(
+                        label="Enable VRAM safety (4070 8GB: 720p local, 960x540 OOM retry, cloud fallback prompt)",
+                        value=bool(settings_defaults["performance"].get("vram_safety", True)),
+                    )
+                with gr.Accordion("NSFW disclaimer / age gate finalization", open=True):
+                    settings_adult_gate = gr.Checkbox(
+                        label="Require adult confirmation gate every local session",
+                        value=bool(settings_defaults["safety"].get("adult_gate_required", adult_confirmation_required())),
+                    )
+                    gr.Markdown(
+                        "By using this app, the operator confirms they are an adult and will create only lawful, consensual adult content. "
+                        "Private prompts, references, LoRAs, and outputs remain local unless an explicit cloud-upload checkbox is enabled for that job."
+                    )
+                with gr.Accordion("General UI / theme options", open=False):
+                    settings_theme = gr.Radio(["Soft", "Default", "Monochrome"], value=settings_defaults["ui"].get("theme", "Soft"), label="Theme preference")
+                    settings_dense_mode = gr.Checkbox(label="Dense mode (compact controls)", value=bool(settings_defaults["ui"].get("dense_mode", False)))
+                    settings_show_json = gr.Checkbox(label="Show advanced JSON manifests by default", value=bool(settings_defaults["ui"].get("show_advanced_json", True)))
+                with gr.Row():
+                    save_settings_button = gr.Button("Save Settings", variant="primary")
+                    refresh_settings_button = gr.Button("Refresh Settings", variant="secondary")
+                settings_json = gr.Code(label="Settings JSON (secrets redacted in display)", language="json")
+                save_settings_button.click(
+                    save_app_settings,
+                    inputs=[settings_runpod_key, settings_cloud_mode, settings_performance_preset, settings_vram_safety, settings_adult_gate, settings_theme, settings_dense_mode, settings_show_json],
+                    outputs=[settings_status, settings_json],
+                    show_progress="full",
+                )
+                refresh_settings_button.click(settings_markdown, outputs=settings_status)
 
             with gr.Tab("Train General Physics LoRA", id="Train General Physics LoRA", visible=initial_interactive) as training_tab:
                 gr.Markdown(
@@ -791,6 +1039,52 @@ def build_ui() -> gr.Blocks:
                     show_progress="full",
                 )
 
+                gr.Markdown(
+                    "## Phase 4.2 Final Export\n"
+                    "Export the current timeline or fallback clip list to a high-quality MP4 sidecar with characters, settings, version, "
+                    "optional audio metadata, and a final 1080p+ upscale pass. Defaults prioritize RTX 4070 8 GB compatibility."
+                )
+                export_project_title = gr.Textbox(label="Export title", value="Futa-Vision Final Export")
+                export_fallback_clips = gr.Textbox(
+                    label="Fallback clip paths (comma-separated; used when timeline is empty)",
+                    placeholder="outputs/extended_clips/clip_a.mp4, outputs/extended_clips/clip_b.mp4",
+                )
+                export_audio = gr.Audio(label="Optional basic audio track", type="filepath")
+                with gr.Row():
+                    export_include_audio = gr.Checkbox(label="Include provided audio track", value=False)
+                    export_final_upscale = gr.Checkbox(label="Run final 1080p+ upscale pass", value=True)
+                    export_vram_safety = gr.Checkbox(label="4070 8GB VRAM safety", value=True)
+                export_quality = gr.Radio(
+                    [
+                        "High Quality 1080p (4070 safe)",
+                        "Preview 720p Fast",
+                        "1440p+ Cloud Recommended",
+                    ],
+                    value="High Quality 1080p (4070 safe)",
+                    label="Export quality preset",
+                )
+                export_button = gr.Button("Export Final MP4", variant="primary", interactive=initial_interactive)
+                export_status = gr.Markdown()
+                export_json = gr.Code(label="Final export metadata", language="json")
+                export_file = gr.File(label="Final MP4 export")
+                export_button.click(
+                    run_final_export,
+                    inputs=[
+                        timeline_components["state_json"],
+                        export_fallback_clips,
+                        selected_partners,
+                        export_project_title,
+                        scene_prompt,
+                        export_audio,
+                        export_include_audio,
+                        export_quality,
+                        export_final_upscale,
+                        export_vram_safety,
+                    ],
+                    outputs=[export_status, export_json, export_file],
+                    show_progress="full",
+                )
+
         def _gate_update(confirmed: bool) -> list[Any]:
             unlocked = confirmed or not adult_confirmation_required()
             return [
@@ -802,6 +1096,7 @@ def build_ui() -> gr.Blocks:
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(selected="Setup" if not unlocked else "Character Library"),
+                gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
@@ -835,6 +1130,7 @@ def build_ui() -> gr.Blocks:
                 preview_characters,
                 chat_button,
                 apply_regeneration_button,
+                export_button,
                 *timeline_components["gated_controls"],
             ],
         )
