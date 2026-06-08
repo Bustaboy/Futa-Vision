@@ -31,7 +31,7 @@ import platform
 import shutil
 import subprocess
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
@@ -248,11 +248,20 @@ class RepairSuggestion:
 
 
 @dataclass(slots=True)
+class RepairActionResult:
+    """Result from a safe repair action shown in the repair command."""
+
+    action: str
+    status: str
+    details: list[Path | str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class InstallCandidate:
     """A detected local application or engine path."""
 
     kind: str
-    path: str
+    path: Path
     confidence: str
     source: str
     details: str = ""
@@ -354,6 +363,14 @@ COMFYUI_NODE_HINTS = [
 ]
 
 CACHE_RESET_TARGETS = [ROOT / "cache", ROOT / "outputs" / "timelines" / "previews"]
+REPAIR_ACTION_FLAGS = {"reset_cache", "fix_model_paths", "reinstall_node_help", "hardware_check", "all"}
+REPAIR_ACTION_LABELS = {
+    "reinstall_node_help": "Reinstall missing ComfyUI nodes",
+    "fix_model_paths": "Fix common model paths",
+    "reset_cache": "Clear cache",
+    "hardware_check": "Re-run hardware check",
+}
+REQUIRED_STATUS_DIRS = [ROOT / relative for relative in PROJECT_DIRECTORIES]
 
 
 class InstallerError(RuntimeError):
@@ -441,6 +458,42 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     LOGGER.info("Wrote JSON file: %s", path)
 
 
+def json_safe(value: Any) -> Any:
+    """Convert Path/dataclass-rich installer objects into JSON-safe values."""
+
+    if isinstance(value, Path):
+        return str(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return {key: json_safe(item) for key, item in asdict(value).items()}
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
+
+
+def candidate_to_dict(candidate: InstallCandidate) -> dict[str, str]:
+    """Serialize an install candidate while keeping internal path handling Path-based."""
+
+    return {
+        "kind": candidate.kind,
+        "path": str(candidate.path),
+        "confidence": candidate.confidence,
+        "source": candidate.source,
+        "details": candidate.details,
+    }
+
+
+def first_existing_path(paths: Iterable[Path]) -> Path | None:
+    """Return the first path that exists, expanded/resolved for stable status output."""
+
+    for path in paths:
+        candidate = path.expanduser()
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
 def load_env_file(path: Path = ENV_PATH) -> dict[str, str]:
     """Parse a simple dotenv file without requiring python-dotenv at bootstrap."""
 
@@ -487,11 +540,62 @@ def merge_env_file(updates: dict[str, str], path: Path = ENV_PATH) -> None:
     LOGGER.info("Merged %s keys into environment file: %s", len(updates), path)
 
 
+def get_install_status() -> dict[str, Any]:
+    """Return a JSON-safe status snapshot for future main.py startup integration."""
+
+    state = read_json(INSTALLER_STATE_PATH)
+    settings = read_json(APP_SETTINGS_PATH)
+    env = load_env_file()
+    missing_dirs = [path for path in REQUIRED_STATUS_DIRS if not path.exists()]
+    status = {
+        "schema_version": INSTALLER_SCHEMA_VERSION,
+        "root": ROOT,
+        "is_first_run": not INSTALLER_STATE_PATH.exists() or not bool(state.get("installed_at")),
+        "state_path": INSTALLER_STATE_PATH,
+        "settings_path": APP_SETTINGS_PATH,
+        "env_path": ENV_PATH,
+        "log_path": LOG_PATH,
+        "state_exists": INSTALLER_STATE_PATH.exists(),
+        "settings_exists": APP_SETTINGS_PATH.exists(),
+        "env_exists": ENV_PATH.exists(),
+        "adult_confirmed": bool(state.get("adult_confirmed", False)),
+        "privacy_acknowledged": bool(state.get("privacy_acknowledged", False)),
+        "hardware_profile": state.get("hardware_profile") or env.get("FUTA_VISION_HARDWARE_PROFILE"),
+        "runpod_configured": bool(state.get("runpod_configured") or env.get("RUNPOD_API_KEY")),
+        "missing_required_dirs": missing_dirs,
+        "warnings": state.get("warnings", []),
+        "updated_at": state.get("updated_at"),
+        "settings_schema_version": settings.get("schema_version"),
+    }
+    status["needs_repair"] = needs_repair(status)
+    return json_safe(status)
+
+
+def is_first_run() -> bool:
+    """Return True when main.py should offer/launch the first-run installer path."""
+
+    return bool(get_install_status()["is_first_run"])
+
+
+def needs_repair(status: dict[str, Any] | None = None) -> bool:
+    """Return True when persisted setup state is incomplete or key folders are missing."""
+
+    current = status or get_install_status()
+    return bool(
+        current.get("is_first_run")
+        or not current.get("settings_exists")
+        or not current.get("env_exists")
+        or not current.get("adult_confirmed")
+        or not current.get("privacy_acknowledged")
+        or current.get("missing_required_dirs")
+    )
+
+
 def add_candidate(bucket: list[InstallCandidate], candidate: InstallCandidate) -> None:
     """Append a candidate unless its path/kind pair is already present."""
 
     for existing in bucket:
-        if existing.kind == candidate.kind and Path(existing.path) == Path(candidate.path):
+        if existing.kind == candidate.kind and existing.path == candidate.path:
             return
     bucket.append(candidate)
 
@@ -580,25 +684,25 @@ def scan_for_installs() -> dict[str, list[InstallCandidate]]:
     for path in explicit["ostris"]:
         resolved = path.expanduser().resolve()
         if looks_like_ostris(resolved):
-            add_candidate(results["ostris"], InstallCandidate("ostris", str(resolved), "high", "environment", "OSTRIS_PATH-style variable"))
+            add_candidate(results["ostris"], InstallCandidate("ostris", resolved, "high", "environment", "OSTRIS_PATH-style variable"))
     for path in explicit["comfyui"]:
         resolved = path.expanduser().resolve()
         if looks_like_comfyui(resolved):
-            add_candidate(results["comfyui"], InstallCandidate("comfyui", str(resolved), "high", "environment", "COMFYUI_PATH-style variable"))
+            add_candidate(results["comfyui"], InstallCandidate("comfyui", resolved, "high", "environment", "COMFYUI_PATH-style variable"))
     for path in explicit["pinokio"]:
         resolved = path.expanduser().resolve()
         if looks_like_pinokio(resolved):
-            add_candidate(results["pinokio"], InstallCandidate("pinokio", str(resolved), "high", "environment", "PINOKIO_HOME-style variable"))
+            add_candidate(results["pinokio"], InstallCandidate("pinokio", resolved, "high", "environment", "PINOKIO_HOME-style variable"))
     for path in explicit["futa_vision"]:
         resolved = path.expanduser().resolve()
         if looks_like_futa_vision(resolved):
-            add_candidate(results["futa_vision"], InstallCandidate("futa_vision", str(resolved), "high", "environment", "FUTA_VISION_HOME-style variable"))
+            add_candidate(results["futa_vision"], InstallCandidate("futa_vision", resolved, "high", "environment", "FUTA_VISION_HOME-style variable"))
 
-    add_candidate(results["futa_vision"], InstallCandidate("futa_vision", str(ROOT), "high", "current checkout", "Current installer location"))
+    add_candidate(results["futa_vision"], InstallCandidate("futa_vision", ROOT, "high", "current checkout", "Current installer location"))
 
     for root in PINOKIO_ROOT_CANDIDATES:
         if looks_like_pinokio(root):
-            add_candidate(results["pinokio"], InstallCandidate("pinokio", str(root.resolve()), "medium", "common location", "Pinokio-like folder"))
+            add_candidate(results["pinokio"], InstallCandidate("pinokio", root.resolve(), "medium", "common location", "Pinokio-like folder"))
 
     roots = list(dict.fromkeys([*ENGINE_ROOT_CANDIDATES, *FUTA_VISION_ROOT_CANDIDATES]))
     for root in roots:
@@ -606,21 +710,21 @@ def scan_for_installs() -> dict[str, list[InstallCandidate]]:
             lower_name = child.name.lower()
             if any(marker.lower() in lower_name for marker in PINOKIO_APP_MARKERS["ostris"]):
                 if looks_like_ostris(child):
-                    add_candidate(results["ostris"], InstallCandidate("ostris", str(child.resolve()), "high", "filesystem scan", "Ostris markers matched"))
+                    add_candidate(results["ostris"], InstallCandidate("ostris", child.resolve(), "high", "filesystem scan", "Ostris markers matched"))
                 else:
                     for nested in iter_reasonable_children(child, max_depth=1, child_limit=40):
                         if looks_like_ostris(nested):
-                            add_candidate(results["ostris"], InstallCandidate("ostris", str(nested.resolve()), "medium", "filesystem scan", "Nested under Ostris-like folder"))
+                            add_candidate(results["ostris"], InstallCandidate("ostris", nested.resolve(), "medium", "filesystem scan", "Nested under Ostris-like folder"))
             if any(marker.lower() in lower_name for marker in PINOKIO_APP_MARKERS["comfyui"]):
                 if looks_like_comfyui(child):
-                    add_candidate(results["comfyui"], InstallCandidate("comfyui", str(child.resolve()), "high", "filesystem scan", "ComfyUI markers matched"))
+                    add_candidate(results["comfyui"], InstallCandidate("comfyui", child.resolve(), "high", "filesystem scan", "ComfyUI markers matched"))
                 else:
                     for nested in iter_reasonable_children(child, max_depth=1, child_limit=40):
                         if looks_like_comfyui(nested):
-                            add_candidate(results["comfyui"], InstallCandidate("comfyui", str(nested.resolve()), "medium", "filesystem scan", "Nested under ComfyUI-like folder"))
+                            add_candidate(results["comfyui"], InstallCandidate("comfyui", nested.resolve(), "medium", "filesystem scan", "Nested under ComfyUI-like folder"))
             if any(marker.lower() in lower_name for marker in PINOKIO_APP_MARKERS["futa_vision"]):
                 if looks_like_futa_vision(child):
-                    add_candidate(results["futa_vision"], InstallCandidate("futa_vision", str(child.resolve()), "medium", "filesystem scan", "Futa-Vision markers matched"))
+                    add_candidate(results["futa_vision"], InstallCandidate("futa_vision", child.resolve(), "medium", "filesystem scan", "Futa-Vision markers matched"))
 
     return results
 
@@ -845,9 +949,9 @@ def ensure_env_defaults(detections: dict[str, list[InstallCandidate]], profile: 
             updates[key] = value
 
     if detections["ostris"] and not existing.get("OSTRIS_PATH"):
-        updates["OSTRIS_PATH"] = detections["ostris"][0].path
+        updates["OSTRIS_PATH"] = str(detections["ostris"][0].path)
     if detections["comfyui"] and not existing.get("COMFYUI_PATH"):
-        updates["COMFYUI_PATH"] = detections["comfyui"][0].path
+        updates["COMFYUI_PATH"] = str(detections["comfyui"][0].path)
     if runpod_key:
         updates["RUNPOD_API_KEY"] = runpod_key
 
@@ -873,9 +977,9 @@ def write_app_settings(profile: HardwareProfile, detections: dict[str, list[Inst
         "logs_dir": "logs",
     })
     if detections["ostris"]:
-        settings["paths"]["ostris_path"] = detections["ostris"][0].path
+        settings["paths"]["ostris_path"] = str(detections["ostris"][0].path)
     if detections["comfyui"]:
-        settings["paths"]["comfyui_path"] = detections["comfyui"][0].path
+        settings["paths"]["comfyui_path"] = str(detections["comfyui"][0].path)
     write_json(APP_SETTINGS_PATH, settings)
 
 
@@ -957,7 +1061,7 @@ def create_missing_comfyui_model_paths(detections: dict[str, list[InstallCandida
 
     if not detections.get("comfyui"):
         raise InstallerError("ComfyUI was not detected, so model paths cannot be repaired automatically. Set COMFYUI_PATH and rerun `python installer.py repair --fix-model-paths`.")
-    comfyui_root = Path(detections["comfyui"][0].path)
+    comfyui_root = detections["comfyui"][0].path
     created: list[Path] = []
     for relative in COMFYUI_EXPECTED_DIRS:
         target = comfyui_root / relative
@@ -970,7 +1074,7 @@ def create_missing_comfyui_model_paths(detections: dict[str, list[InstallCandida
 def render_comfyui_node_reinstall_help(detections: dict[str, list[InstallCandidate]]) -> None:
     """Render non-destructive guidance for reinstalling missing ComfyUI nodes."""
 
-    comfy_path = Path(detections["comfyui"][0].path) if detections.get("comfyui") else None
+    comfy_path = detections["comfyui"][0].path if detections.get("comfyui") else None
     lines = [
         "1. Open ComfyUI and install/enable ComfyUI-Manager if it is missing.",
         "2. In ComfyUI-Manager, install or reinstall these video nodes:",
@@ -1046,7 +1150,7 @@ def render_detection_table(detections: dict[str, list[InstallCandidate]]) -> Non
             continue
         for index, entry in enumerate(entries):
             status = "[green]found[/green]" if index == 0 else "[blue]also found[/blue]"
-            table.add_row(label if index == 0 else "", status, entry.path, entry.source, entry.details)
+            table.add_row(label if index == 0 else "", status, str(entry.path), entry.source, entry.details)
     CONSOLE.print(table)
 
 
@@ -1102,7 +1206,7 @@ def inspect_comfyui(path: Path) -> list[RepairSuggestion]:
         suggestions.append(RepairSuggestion(
             area="ComfyUI",
             severity="warning",
-            symptom=f"Missing expected folders: {', '.join(missing_dirs)}",
+            symptom=f"Missing expected folders: {', '.join(str(path) for path in missing_dirs)}",
             actions=[
                 "Open ComfyUI once so it can create its model/custom_nodes folders.",
                 "Fix COMFYUI_PATH if it points to a wrapper folder instead of the real ComfyUI checkout.",
@@ -1174,7 +1278,7 @@ def build_repair_suggestions(detections: dict[str, list[InstallCandidate]], repo
             ],
         ))
     else:
-        suggestions.extend(inspect_ostris(Path(detections["ostris"][0].path)))
+        suggestions.extend(inspect_ostris(detections["ostris"][0].path))
 
     if not detections.get("comfyui"):
         suggestions.append(RepairSuggestion(
@@ -1188,7 +1292,7 @@ def build_repair_suggestions(detections: dict[str, list[InstallCandidate]], repo
             ],
         ))
     else:
-        suggestions.extend(inspect_comfyui(Path(detections["comfyui"][0].path)))
+        suggestions.extend(inspect_comfyui(detections["comfyui"][0].path))
 
     if not detections.get("pinokio"):
         suggestions.append(RepairSuggestion(
@@ -1374,7 +1478,7 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
         CONSOLE.print(Panel(f"Sample image: {image}\nSample clip: {clip}", title="Sample tests complete", border_style="green"))
 
     detected_state = {
-        kind: [asdict(candidate) for candidate in candidates]
+        kind: [candidate_to_dict(candidate) for candidate in candidates]
         for kind, candidates in detections.items()
     }
     all_warnings = [*report.warnings, *sample_warnings]
@@ -1391,13 +1495,14 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
         detected=detected_state,
         warnings=all_warnings,
     )
-    write_json(INSTALLER_STATE_PATH, asdict(state))
+    write_json(INSTALLER_STATE_PATH, json_safe(state))
     CONSOLE.print(Panel(
-        "[bold green]Ready to launch.[/bold green]\n"
+        "[bold green]Installation successful! You can now launch Futa-Vision.[/bold green]\n"
         "Next steps:\n"
         "1. Review any repair suggestions below.\n"
-        "2. Start the app with `python main.py`.\n"
-        "3. Open the Setup tab and confirm hardware/cloud status before generation.",
+        "2. Start the app with `python main.py` when you are ready.\n"
+        "3. Open the Setup tab and confirm hardware/cloud status before generation.\n"
+        "4. If anything looks off later, run `python installer.py repair`.",
         title="Wizard complete",
         border_style="green",
     ))
@@ -1428,23 +1533,94 @@ def command_test_samples(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_repair(args: argparse.Namespace) -> int:
-    """Print repair suggestions and optionally perform safe repair actions."""
+def repair_actions_requested(args: argparse.Namespace) -> bool:
+    """Return whether any safe repair action was requested by flag."""
 
-    ensure_project_directories()
-    detections = scan_for_installs()
-    if getattr(args, "reset_cache", False):
+    return any(bool(getattr(args, flag, False)) for flag in REPAIR_ACTION_FLAGS)
+
+
+def prompt_for_repair_actions(args: argparse.Namespace) -> None:
+    """Offer a small repair menu for users running `python installer.py repair`."""
+
+    if args.non_interactive or repair_actions_requested(args):
+        return
+
+    CONSOLE.print(Panel(
+        "Choose any safe repair actions to run now. The installer will still show a full status report after the menu.",
+        title="Repair Mode",
+        border_style="cyan",
+    ))
+    for flag, label in REPAIR_ACTION_LABELS.items():
+        if Confirm.ask(label + "?", default=flag == "hardware_check"):
+            setattr(args, flag, True)
+
+
+def run_repair_actions(args: argparse.Namespace, detections: dict[str, list[InstallCandidate]]) -> list[RepairActionResult]:
+    """Run selected safe Repair Mode actions and return displayable results."""
+
+    results: list[RepairActionResult] = []
+    run_all = bool(getattr(args, "all", False))
+
+    if run_all or getattr(args, "reset_cache", False):
         reset_paths = reset_cache()
-        CONSOLE.print(Panel("\n".join(str(path) for path in reset_paths), title="Clear cache complete", border_style="green"))
-    if getattr(args, "fix_model_paths", False):
-        repaired_paths = create_missing_comfyui_model_paths(detections)
-        CONSOLE.print(Panel("\n".join(str(path) for path in repaired_paths), title="Fixed/verified ComfyUI model paths", border_style="green"))
-    if getattr(args, "reinstall_node_help", False):
+        results.append(RepairActionResult("Clear cache", "complete", reset_paths))
+        LOGGER.info("Repair action complete: clear cache")
+
+    if run_all or getattr(args, "fix_model_paths", False):
+        try:
+            repaired_paths = create_missing_comfyui_model_paths(detections)
+        except InstallerError as exc:
+            results.append(RepairActionResult("Fix common model paths", "skipped", [str(exc)]))
+            LOGGER.warning("Repair action skipped: fix model paths (%s)", exc)
+        else:
+            results.append(RepairActionResult("Fix common model paths", "complete", repaired_paths))
+            LOGGER.info("Repair action complete: fix model paths")
+
+    if run_all or getattr(args, "reinstall_node_help", False):
         render_comfyui_node_reinstall_help(detections)
+        results.append(RepairActionResult("Reinstall missing ComfyUI nodes", "guidance shown", COMFYUI_NODE_HINTS))
+        LOGGER.info("Repair action complete: ComfyUI node guidance displayed")
+
+    if run_all or getattr(args, "hardware_check", False):
+        report = build_hardware_report()
+        render_hardware_report(report)
+        results.append(RepairActionResult("Re-run hardware check", "complete", [report.profile_reason]))
+        LOGGER.info("Repair action complete: hardware check")
+
+    return results
+
+def render_repair_action_results(results: list[RepairActionResult]) -> None:
+    """Print a concise summary of Repair Mode changes/guidance."""
+
+    if not results:
+        return
+    table = Table(title="Repair actions completed", box=box.SIMPLE_HEAVY)
+    table.add_column("Action", style="bold")
+    table.add_column("Status")
+    table.add_column("Details")
+    for result in results:
+        table.add_row(result.action, result.status, "\n".join(str(item) for item in result.details) or "—")
+    CONSOLE.print(table)
+
+
+def command_repair(args: argparse.Namespace) -> int:
+    """Run Repair Mode: safe fixes, hardware check, and actionable suggestions."""
+
+    LOGGER.info("Running repair command")
+    ensure_project_directories()
+    prompt_for_repair_actions(args)
+    detections = scan_for_installs()
+    results = run_repair_actions(args, detections)
+    render_repair_action_results(results)
     report = build_hardware_report()
     render_detection_table(detections)
     render_hardware_report(report)
     render_repair_suggestions(detections, report)
+    CONSOLE.print(Panel(
+        "Repair Mode complete. If a warning remains, follow the listed recovery action and rerun `python installer.py repair`.",
+        title="Repair complete",
+        border_style="green",
+    ))
     return 0
 
 
@@ -1468,7 +1644,8 @@ def command_install(args: argparse.Namespace) -> int:
 
     CONSOLE.print(Panel(
         "\n".join([
-            "Installation successful!",
+            "Installation successful! You can now launch Futa-Vision.",
+            "Next step: run `python main.py` or use --launch to start automatically.",
             f"Installer state: {INSTALLER_STATE_PATH}",
             f"App settings: {APP_SETTINGS_PATH}",
             f"Environment file: {ENV_PATH}",
@@ -1496,6 +1673,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runpod-key", help="Optional RunPod API key to write to .env.")
     parser.add_argument("--skip-sample-tests", action="store_true", help="Skip sample image and short clip tests.")
     parser.add_argument("--launch", action="store_true", help="Launch main.py automatically after a successful install.")
+    parser.add_argument("--repair-mode", action="store_true", help="Open Repair Mode instead of the full installer wizard.")
 
     detect = subparsers.add_parser("detect", help="Detect engines and hardware without writing wizard state.")
     detect.add_argument("--repair", action="store_true", help="Also print repair suggestions.")
@@ -1505,9 +1683,11 @@ def build_parser() -> argparse.ArgumentParser:
     samples.set_defaults(func=command_test_samples)
 
     repair = subparsers.add_parser("repair", help="Print setup repair suggestions and run safe repair actions.")
-    repair.add_argument("--reset-cache", action="store_true", help="Clear disposable cache/preview folders and recreate them.")
+    repair.add_argument("--reset-cache", "--clear-cache", dest="reset_cache", action="store_true", help="Clear disposable cache/preview folders and recreate them.")
     repair.add_argument("--fix-model-paths", action="store_true", help="Create missing ComfyUI model/custom_nodes folders when COMFYUI_PATH is detected.")
     repair.add_argument("--reinstall-node-help", action="store_true", help="Show step-by-step ComfyUI node reinstall guidance.")
+    repair.add_argument("--hardware-check", action="store_true", help="Re-run and display the hardware check inside Repair Mode.")
+    repair.add_argument("--all", action="store_true", help="Run all safe repair actions.")
     repair.set_defaults(func=command_repair)
 
     subparsers.add_parser("install", help="Run the full installer wizard.").set_defaults(func=command_install)
@@ -1522,6 +1702,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "repair_mode", False):
+        args.func = command_repair
     LOGGER.info("Installer command started: %s", args)
     try:
         result = int(args.func(args))
