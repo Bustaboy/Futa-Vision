@@ -715,11 +715,20 @@ def default_installer_manifest() -> dict[str, Any]:
                 "ComfyUI-LTXVideo": "unknown",
                 "ComfyUI-WanVideoWrapper": "unknown",
             },
+            "installed_comfyui_nodes": [],
+            "missing_comfyui_nodes": [],
             "recommended_models": {},
         },
+        "recommended_workflows": [
+            {"name": "RTX 4070 8GB local preview", "status": "recommended", "notes": "Use 720p, batch size 1, and VRAM safety for local previews."},
+            {"name": "RunPod final video/offload", "status": "optional", "notes": "Use cloud offload for long or high-resolution jobs."},
+            {"name": "Ostris LoRA training", "status": "pending_paths", "notes": "Requires OSTRIS_PATH before training."},
+        ],
         "folders": {"cache": "cache", "outputs": "outputs", "final_videos": "outputs/final_videos", "logs": "logs"},
         "sample_tests": {"last_run_at": None, "status": "not_run", "warnings": []},
+        "last_sample_test_result": {"status": "not_run", "summary": "Sample media tests have not run yet.", "image_path": None, "clip_path": None, "warnings": []},
         "runpod": {"ready": False, "api_key_present": bool(os.getenv("RUNPOD_API_KEY")), "default_mode": "Auto"},
+        "last_run_summary": {"status": "not_configured", "completed_at": None, "message": "Installer has not completed yet.", "warnings_count": 1, "log_path": str(INSTALLER_LOG_PATH)},
         "last_successful_installer_run": None,
         "overall_status": "not_configured",
         "warnings": ["Installer manifest was not found. Run the installer before generation."],
@@ -735,10 +744,29 @@ def load_installer_manifest(path: Path | None = None) -> dict[str, Any]:
         return defaults | {"manifest_exists": False}
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        return defaults | {"manifest_exists": True, "warnings": [f"Installer manifest could not be read: {exc}"]}
+    except json.JSONDecodeError as exc:
+        return defaults | {
+            "manifest_exists": True,
+            "manifest_error": f"corrupt JSON at line {exc.lineno}, column {exc.colno}",
+            "overall_status": "needs_repair",
+            "warnings": [
+                f"Installer manifest is corrupted: {exc}. Click Run Installer / Repair Installation to rebuild it, or rename settings/installer_manifest.json and run setup.bat.",
+            ],
+        }
+    except OSError as exc:
+        return defaults | {
+            "manifest_exists": True,
+            "manifest_error": str(exc),
+            "overall_status": "needs_repair",
+            "warnings": [f"Installer manifest could not be read: {exc}. Check file permissions and run repair."],
+        }
     if not isinstance(payload, dict):
-        return defaults | {"manifest_exists": True, "warnings": ["Installer manifest is not a JSON object."]}
+        return defaults | {
+            "manifest_exists": True,
+            "manifest_error": "not_json_object",
+            "overall_status": "needs_repair",
+            "warnings": ["Installer manifest is not a JSON object. Click Run Installer / Repair Installation to rebuild it."],
+        }
 
     merged = defaults
     for key, value in payload.items():
@@ -771,6 +799,27 @@ def _markdown_list(items: dict[str, Any]) -> str:
     return "\n".join(f"- `{key}`: `{value if value else 'not detected'}`" for key, value in items.items())
 
 
+def installer_status_badge(manifest: dict[str, Any]) -> str:
+    """Return a small colored HTML status badge for the Settings tab."""
+
+    if manifest.get("manifest_error"):
+        return status_badge("Manifest needs repair", "warning")
+    if installation_needs_attention(manifest):
+        return status_badge("Setup attention needed", "warning")
+    return status_badge("Installer ready", "success")
+
+
+def _workflow_markdown(workflows: list[dict[str, Any]]) -> str:
+    """Render recommended workflow readiness without exposing raw JSON first."""
+
+    if not workflows:
+        return "- No workflow recommendations recorded yet."
+    return "\n".join(
+        f"- `{workflow.get('name', 'Workflow')}`: `{workflow.get('status', 'unknown')}` — {workflow.get('notes', '')}"
+        for workflow in workflows
+    )
+
+
 def installer_status_markdown() -> str:
     """Render the persistent Phase 5 installer status for the Settings tab."""
 
@@ -779,17 +828,29 @@ def installer_status_markdown() -> str:
     warning_text = "\n".join(f"- ⚠️ {warning}" for warning in warnings) if warnings else "- ✅ No installer warnings recorded."
     node_text = _markdown_list(manifest.get("comfyui", {}).get("required_nodes", {}))
     path_text = _markdown_list(manifest.get("detected_paths", {}))
+    workflow_text = _workflow_markdown(manifest.get("recommended_workflows", []))
     sample_tests = manifest.get("sample_tests", {})
+    last_sample = manifest.get("last_sample_test_result", {})
     runpod = manifest.get("runpod", {})
+    last_run = manifest.get("last_run_summary", {})
     attention = "⚠️ First-run or repair is recommended." if installation_needs_attention(manifest) else "✅ Installer state looks ready."
+    manifest_note = ""
+    if not manifest.get("manifest_exists"):
+        manifest_note = "\n\n> Manifest file is missing. The app is using safe defaults until setup or repair writes a fresh file."
+    elif manifest.get("manifest_error"):
+        manifest_note = f"\n\n> Manifest problem: `{manifest['manifest_error']}`. Repair can rebuild this file without deleting user outputs."
     return f"""
 ## Phase 5 Installer Status
-{attention}
+{installer_status_badge(manifest)}
+
+{attention}{manifest_note}
 
 - Overall status: `{manifest.get('overall_status', 'unknown')}`
 - Last successful installer run: `{manifest.get('last_successful_installer_run') or 'never'}`
+- Last run summary: `{last_run.get('message', 'No installer run recorded.')}`
 - Hardware profile: `{manifest.get('selected_hardware_profile', 'low_vram_8gb')}`
 - Sample tests: `{sample_tests.get('status', 'not_run')}` (last run: `{sample_tests.get('last_run_at') or 'never'}`)
+- Last sample result: `{last_sample.get('summary', 'Sample media tests have not run yet.')}`
 - RunPod ready: `{runpod.get('ready', False)}` (API key present: `{runpod.get('api_key_present', False)}`)
 - Installer log: `{INSTALLER_LOG_PATH}`
 
@@ -798,6 +859,9 @@ def installer_status_markdown() -> str:
 
 ### Required ComfyUI Nodes
 {node_text}
+
+### Recommended Workflows
+{workflow_text}
 
 ### Warnings / Repair Notes
 {warning_text}
@@ -808,11 +872,11 @@ def installation_attention_banner() -> str:
     """Show a prominent top-of-app first-run/repair message."""
 
     if not installation_needs_attention():
-        return "✅ Phase 5 installer manifest found. Open Settings for details or repair tools."
+        return "✅ Phase 5 installer status is ready. Open Settings any time for diagnostics or repair tools."
     return (
         "## ⚠️ Setup or repair recommended\n"
-        "Futa-Vision can open, but generation/training paths may be incomplete. "
-        "Open the ⚙️ Settings tab and click **Run Installer / Repair Installation** before creating outputs."
+        "Futa-Vision can open, but generation/training paths may be incomplete or the manifest may need repair. "
+        "Open the ⚙️ Settings tab and click **🛠️ Run Installer / Repair Installation (safe)** before creating outputs."
     )
 
 
@@ -837,8 +901,8 @@ def run_installer_repair_from_ui() -> tuple[str, str]:
     if not output:
         output = "Installer finished without console output."
     if completed.returncode == 0:
-        return settings_markdown(), "Installer / repair completed successfully.\n\n" + output[-12000:]
-    return settings_markdown(), f"Installer exited with code {completed.returncode}. Review logs/installer.log.\n\n{output[-12000:]}"
+        return settings_markdown(), "✅ Installer / repair completed successfully. Settings were refreshed.\n\n" + output[-12000:]
+    return settings_markdown(), f"❌ Installer exited with code {completed.returncode}. Review logs/installer.log, then rerun repair or setup.bat.\n\n{output[-12000:]}"
 
 
 def settings_markdown() -> str:
@@ -1013,7 +1077,11 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     save_settings_button = gr.Button("Save Settings", variant="primary")
                     refresh_settings_button = gr.Button("Refresh Settings", variant="secondary")
-                    run_installer_button = gr.Button("Run Installer / Repair Installation", variant="primary")
+                    run_installer_button = gr.Button("🛠️ Run Installer / Repair Installation (safe)", variant="primary", size="lg")
+                gr.Markdown(
+                    "**Repair is safe to run repeatedly.** It refreshes folders, paths, sample-test status, and the installer manifest without deleting outputs. "
+                    "It may take several minutes if dependencies or hardware checks are slow."
+                )
                 installer_run_output = gr.Textbox(label="Installer / Repair Output", lines=12, max_lines=18, interactive=False)
                 settings_json = gr.Code(label="Settings JSON (secrets redacted in display)", language="json")
                 save_settings_button.click(

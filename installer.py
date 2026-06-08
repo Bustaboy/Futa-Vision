@@ -560,6 +560,8 @@ def default_installer_manifest() -> dict[str, Any]:
         },
         "comfyui": {
             "required_nodes": {node: "unknown" for node in COMFYUI_NODE_HINTS},
+            "installed_comfyui_nodes": [],
+            "missing_comfyui_nodes": [],
             "recommended_models": {
                 "sdxl_checkpoint": {"status": "unknown", "path": None, "notes": "Place a compatible SDXL checkpoint in ComfyUI/models/checkpoints."},
                 "wan_video_model": {"status": "unknown", "path": None, "notes": "Recommended for higher-quality video workflows; use RunPod if local VRAM is insufficient."},
@@ -567,6 +569,7 @@ def default_installer_manifest() -> dict[str, Any]:
                 "loras": {"status": "unknown", "path": None, "notes": "Partner and general-physics LoRAs should be linked or copied to ComfyUI/models/loras."},
             },
         },
+        "recommended_workflows": _recommended_workflows(None, None, False),
         "folders": {
             "cache": "cache",
             "outputs": "outputs",
@@ -582,11 +585,26 @@ def default_installer_manifest() -> dict[str, Any]:
             "clip_test": {"status": "not_run", "path": None},
             "warnings": [],
         },
+        "last_sample_test_result": {
+            "status": "not_run",
+            "summary": "Sample media tests have not run yet.",
+            "image_path": None,
+            "clip_path": None,
+            "warnings": [],
+        },
         "runpod": {
             "ready": False,
             "api_key_present": False,
             "default_mode": "Auto",
             "notes": "RunPod is optional but recommended for long Wan jobs, high-resolution upscales, or repeated CUDA out-of-memory errors on 8GB GPUs.",
+        },
+        "last_run_summary": {
+            "status": "not_configured",
+            "completed_at": None,
+            "command": None,
+            "message": "Installer has not completed yet.",
+            "warnings_count": 1,
+            "log_path": str(LOG_PATH.relative_to(ROOT)),
         },
         "last_successful_installer_run": None,
         "overall_status": "not_configured",
@@ -611,6 +629,28 @@ def _comfyui_node_status(comfyui_path: str | None) -> dict[str, str]:
         return {node: "missing" for node in COMFYUI_NODE_HINTS}
     installed = {child.name.lower() for child in custom_nodes.iterdir() if child.is_dir()}
     return {node: "installed" if node.lower() in installed else "missing" for node in COMFYUI_NODE_HINTS}
+
+
+def _recommended_workflows(comfyui_path: str | None, ostris_path: str | None, runpod_ready: bool) -> list[dict[str, str]]:
+    """Build user-facing workflow readiness from detected engines and cloud state."""
+
+    return [
+        {
+            "name": "RTX 4070 8GB local preview",
+            "status": "ready" if comfyui_path else "needs_comfyui",
+            "notes": "Use 1280x720, batch size 1, short clips, VRAM safety enabled, and retry at 960x540 after CUDA OOM.",
+        },
+        {
+            "name": "RunPod final video/offload",
+            "status": "ready" if runpod_ready else "optional",
+            "notes": "Use for long Wan jobs, high-resolution upscales, or repeated local CUDA out-of-memory errors.",
+        },
+        {
+            "name": "Ostris LoRA training",
+            "status": "ready" if ostris_path else "pending_paths",
+            "notes": "Requires OSTRIS_PATH and a completed sample test before training runs.",
+        },
+    ]
 
 
 def _model_status(comfyui_path: str | None, relative_folder: str, patterns: tuple[str, ...]) -> dict[str, str | None]:
@@ -665,7 +705,10 @@ def write_installer_manifest(
 
     comfyui_path = detected_paths.get("comfyui")
     comfyui = dict(manifest.get("comfyui", {}))
-    comfyui["required_nodes"] = _comfyui_node_status(comfyui_path)
+    node_status = _comfyui_node_status(comfyui_path)
+    comfyui["required_nodes"] = node_status
+    comfyui["installed_comfyui_nodes"] = [node for node, status in node_status.items() if status == "installed"]
+    comfyui["missing_comfyui_nodes"] = [node for node, status in node_status.items() if status == "missing"]
     recommended = dict(default_installer_manifest()["comfyui"]["recommended_models"])
     checks = {
         "sdxl_checkpoint": _model_status(comfyui_path, "models/checkpoints", (".safetensors", ".ckpt", ".pt", ".pth")),
@@ -679,11 +722,19 @@ def write_installer_manifest(
     manifest["comfyui"] = comfyui
 
     if sample_image_path or sample_clip_path:
+        sample_status = "warning" if sample_warnings else "passed"
         manifest["sample_tests"] = {
             "last_run_at": now_iso(),
-            "status": "warning" if sample_warnings else "passed",
+            "status": sample_status,
             "image_test": {"status": "passed" if sample_image_path else "not_run", "path": sample_image_path},
             "clip_test": {"status": "passed" if sample_clip_path and str(sample_clip_path).endswith(".mp4") else "warning" if sample_clip_path else "not_run", "path": sample_clip_path},
+            "warnings": sample_warnings or [],
+        }
+        manifest["last_sample_test_result"] = {
+            "status": sample_status,
+            "summary": "Sample image and clip checks completed with warnings." if sample_warnings else "Sample image and clip checks passed.",
+            "image_path": sample_image_path,
+            "clip_path": sample_clip_path,
             "warnings": sample_warnings or [],
         }
 
@@ -694,7 +745,9 @@ def write_installer_manifest(
         "default_mode": "Auto",
         "notes": default_installer_manifest()["runpod"]["notes"],
     }
-    manifest["last_successful_installer_run"] = now_iso() if overall_status in {"installed", "repaired", "samples_passed"} else manifest.get("last_successful_installer_run")
+    manifest["recommended_workflows"] = _recommended_workflows(comfyui_path, detected_paths.get("ostris"), runpod_key_present)
+    completed_at = now_iso()
+    manifest["last_successful_installer_run"] = completed_at if overall_status in {"installed", "repaired", "samples_passed"} else manifest.get("last_successful_installer_run")
     manifest["overall_status"] = overall_status
     warnings = list(report.warnings if report else []) + list(sample_warnings or [])
     if not detected_paths.get("comfyui"):
@@ -702,6 +755,14 @@ def write_installer_manifest(
     if not detected_paths.get("ostris"):
         warnings.append("Ostris AI Toolkit was not detected. Set OSTRIS_PATH before LoRA training.")
     manifest["warnings"] = warnings
+    manifest["last_run_summary"] = {
+        "status": overall_status,
+        "completed_at": completed_at,
+        "command": "installer.py",
+        "message": "Installer status was refreshed successfully." if overall_status in {"installed", "repaired", "samples_passed"} else "Installer completed with warnings or partial status.",
+        "warnings_count": len(warnings),
+        "log_path": str(LOG_PATH.relative_to(ROOT)),
+    }
     write_json(INSTALLER_MANIFEST_PATH, json_safe(manifest))
     return manifest
 

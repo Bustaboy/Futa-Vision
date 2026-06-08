@@ -17,6 +17,8 @@
       "ComfyUI-LTXVideo": "unknown",
       "ComfyUI-WanVideoWrapper": "unknown"
     },
+    "installed_comfyui_nodes": [],
+    "missing_comfyui_nodes": [],
     "recommended_models": {
       "sdxl_checkpoint": {
         "status": "unknown",
@@ -40,6 +42,23 @@
       }
     }
   },
+  "recommended_workflows": [
+    {
+      "name": "RTX 4070 8GB local preview",
+      "status": "recommended",
+      "notes": "Use 1280x720, batch size 1, short clips, VRAM safety enabled, and retry at 960x540 after CUDA OOM."
+    },
+    {
+      "name": "RunPod final video/offload",
+      "status": "optional",
+      "notes": "Use for long Wan jobs, high-resolution upscales, or repeated local CUDA out-of-memory errors."
+    },
+    {
+      "name": "Ostris LoRA training",
+      "status": "pending_paths",
+      "notes": "Requires OSTRIS_PATH and a completed sample test before training runs."
+    }
+  ],
   "folders": {
     "cache": "cache",
     "outputs": "outputs",
@@ -61,11 +80,26 @@
     },
     "warnings": []
   },
+  "last_sample_test_result": {
+    "status": "not_run",
+    "summary": "Sample media tests have not run yet.",
+    "image_path": null,
+    "clip_path": null,
+    "warnings": []
+  },
   "runpod": {
     "ready": false,
     "api_key_present": false,
     "default_mode": "Auto",
     "notes": "RunPod is optional but recommended for long Wan jobs, high-resolution upscales, or repeated CUDA out-of-memory errors on 8GB GPUs."
+  },
+  "last_run_summary": {
+    "status": "not_configured",
+    "completed_at": null,
+    "command": null,
+    "message": "Installer has not completed yet.",
+    "warnings_count": 1,
+    "log_path": "logs/installer.log"
   },
   "last_successful_installer_run": null,
   "overall_status": "not_configured",
