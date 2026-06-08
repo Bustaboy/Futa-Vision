@@ -6,6 +6,9 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+build/
+dist/
+*.spec
 
 # Local environment files
 .env
