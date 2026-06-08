@@ -79,7 +79,7 @@ The current Phase 0 implementation is a runnable Gradio-first skeleton that mirr
 
 ### How to test Phase 0
 
-1. Create and activate a Python 3.12 or 3.13 virtual environment. Python 3.14 is intentionally blocked until the pinned video/UI stack publishes full support for it.
+1. Create and activate a Python 3.12 virtual environment. Python 3.13+ is intentionally blocked until the pinned NumPy/MoviePy/OpenCV video stack publishes compatible wheels and metadata.
 2. Install runtime dependencies:
 
    ```bash
