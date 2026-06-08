@@ -8,6 +8,7 @@ packaged with PyInstaller into a small FutaVisionSetup.exe.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import queue
 import subprocess
@@ -49,6 +50,14 @@ BOOTSTRAP_STEPS = [
     BootstrapStep("Ready to launch", "Open the local Gradio application."),
 ]
 
+FRIENDLY_FAILURES = {
+    "python": "Python 3.12 was not found. Install Python 3.12, enable Add python.exe to PATH, then retry.",
+    "venv": "The local .venv could not be created. Check folder permissions, then retry or use the fallback console installer.",
+    "pip": "Python package installation failed. Check internet access, disk space, and antivirus/network filtering.",
+    "installer": "The guided installer reported a setup problem. Open the log for details or try the fallback console installer.",
+    "samples": "Sample verification failed. The app may still open, but run Health Check before generation.",
+}
+
 
 def app_root() -> Path:
     """Return the repository root beside this script or packaged executable."""
@@ -77,6 +86,174 @@ def utf8_env(base: dict[str, str] | None = None) -> dict[str, str]:
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8:replace")
     return env
+
+
+def friendly_status_from_output(line: str) -> str | None:
+    """Extract a concise user-facing status from verbose command output."""
+
+    clean = line.strip()
+    if not clean:
+        return None
+    lower = clean.lower()
+    if lower.startswith("collecting "):
+        return f"Resolving dependency: {clean.split(maxsplit=1)[1].split()[0]}"
+    if lower.startswith("downloading "):
+        return f"Downloading: {clean.split(maxsplit=1)[1].split()[0]}"
+    if "installing collected packages" in lower:
+        return "Installing collected Python packages..."
+    if "successfully installed" in lower:
+        return "Python dependencies installed."
+    if "running command:" in lower and "comfy_cli" in lower:
+        return "Installing ComfyUI portable framework..."
+    if "comfyui portable" in lower and "complete" in lower:
+        return "ComfyUI portable install completed."
+    if "ostris portable" in lower:
+        return "Preparing Ostris portable setup guidance..."
+    if "model downloads skipped" in lower:
+        return "Model downloads skipped for later Model Downloader use."
+    if "downloaded" in lower and "model" in lower:
+        return "Downloading selected model assets..."
+    if "sample image" in lower or "sample clip" in lower or "sample tests" in lower:
+        return "Running sample media verification..."
+    if "health check" in lower:
+        return "Running setup health checks..."
+    return None
+
+
+def is_windows() -> bool:
+    """Return whether this bootstrapper is running on Windows."""
+
+    return os.name == "nt"
+
+
+def is_running_as_admin() -> bool:
+    """Return whether the current Windows process has administrator rights."""
+
+    if not is_windows():
+        return False
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return False
+
+
+def can_write_to_root(root: Path) -> bool:
+    """Check whether setup can write to the selected app folder."""
+
+    probe = root / ".bootstrapper_write_test"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
+
+
+def should_offer_admin(root: Path) -> bool:
+    """Return whether an admin relaunch is useful for this install folder."""
+
+    return is_windows() and not is_running_as_admin() and not can_write_to_root(root)
+
+
+def relaunch_as_admin(root: Path) -> bool:
+    """Relaunch the bootstrapper with Windows UAC elevation."""
+
+    if not is_windows():
+        return False
+    try:
+        if getattr(sys, "frozen", False):
+            executable = sys.executable
+            params = ""
+        else:
+            executable = sys.executable
+            params = f'"{Path(__file__).resolve()}"'
+        result = ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+            None,
+            "runas",
+            executable,
+            params,
+            str(root),
+            1,
+        )
+    except (AttributeError, OSError):
+        return False
+    return int(result) > 32
+
+
+def launch_script_text() -> str:
+    """Return the local launch script written for shortcuts."""
+
+    return "\r\n".join([
+        "@echo off",
+        "cd /d \"%~dp0\"",
+        "\".venv\\Scripts\\python.exe\" main.py",
+        "pause",
+        "",
+    ])
+
+
+def desktop_dir(home: Path | None = None) -> Path:
+    """Return the likely Windows desktop path."""
+
+    return (home or Path.home()) / "Desktop"
+
+
+def create_desktop_shortcut(
+    root: Path,
+    _python_command: Sequence[str],
+    log: Callable[[str], None] | None = None,
+) -> bool:
+    """Create a desktop launcher shortcut after successful setup."""
+
+    if not is_windows():
+        return False
+    logger = log or (lambda message: None)
+    launcher = root / "Launch Futa-Vision.bat"
+    try:
+        launcher.write_text(launch_script_text(), encoding="utf-8")
+    except OSError as exc:
+        logger(f"Could not write launcher script: {exc}")
+        return False
+
+    desktop = desktop_dir()
+    shortcut = desktop / "Futa-Vision.lnk"
+    if not desktop.exists():
+        logger("Desktop folder was not found; launcher script was created in the app folder.")
+        return False
+
+    escaped_shortcut = str(shortcut).replace("'", "''")
+    escaped_launcher = str(launcher).replace("'", "''")
+    escaped_root = str(root).replace("'", "''")
+    script = (
+        "$shell = New-Object -ComObject WScript.Shell; "
+        f"$shortcut = $shell.CreateShortcut('{escaped_shortcut}'); "
+        f"$shortcut.TargetPath = '{escaped_launcher}'; "
+        f"$shortcut.WorkingDirectory = '{escaped_root}'; "
+        "$shortcut.Description = 'Launch Futa-Vision'; "
+        "$shortcut.Save()"
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+            env=utf8_env(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger(f"Could not create desktop shortcut: {exc}")
+        return False
+    if completed.returncode != 0:
+        logger("Could not create desktop shortcut; launcher script remains in the app folder.")
+        if completed.stderr:
+            logger(completed.stderr.strip())
+        return False
+    logger("Desktop shortcut created: Futa-Vision.lnk")
+    return True
 
 
 def parse_python_version(value: str) -> tuple[int, int, int] | None:
@@ -189,7 +366,23 @@ class BootstrapRunner:
     def step(self, index: int, status: str, message: str = "") -> None:
         self.emit("step", index, status, message)
 
-    def run_process(self, command: Sequence[str], step_index: int, allow_failure: bool = False) -> bool:
+    def fail(self, step_index: int, kind: str, detail: str = "") -> None:
+        """Publish a friendly failure message for the UI."""
+
+        message = FRIENDLY_FAILURES.get(kind, "Setup could not continue.")
+        if detail:
+            message = f"{message} {detail}"
+        self.log(message)
+        self.step(step_index, "error", message)
+        self.emit("failure", message)
+
+    def run_process(
+        self,
+        command: Sequence[str],
+        step_index: int,
+        failure_kind: str,
+        allow_failure: bool = False,
+    ) -> bool:
         """Run a command, stream output, and return success."""
 
         self.log(f"> {' '.join(command)}")
@@ -206,12 +399,16 @@ class BootstrapRunner:
             )
         except OSError as exc:
             self.log(f"Failed to start command: {exc}")
-            self.step(step_index, "error", str(exc))
+            self.fail(step_index, failure_kind, str(exc))
             return False
 
         assert process.stdout is not None
         for line in process.stdout:
-            self.log(line.rstrip())
+            stripped = line.rstrip()
+            self.log(stripped)
+            status = friendly_status_from_output(stripped)
+            if status:
+                self.step(step_index, "running", status)
         return_code = process.wait()
         if return_code == 0:
             return True
@@ -220,7 +417,7 @@ class BootstrapRunner:
         if allow_failure:
             self.step(step_index, "warning", message)
             return False
-        self.step(step_index, "error", message)
+        self.fail(step_index, failure_kind, message)
         return False
 
     def validate_root(self) -> bool:
@@ -235,14 +432,17 @@ class BootstrapRunner:
         """Run the direct GUI-owned bootstrap flow."""
 
         if not self.validate_root():
-            self.step(0, "error", "Bootstrapper is not beside the Futa-Vision repository files.")
+            self.fail(0, "installer", "Bootstrapper is not beside the Futa-Vision repository files.")
+            return False
+        if not can_write_to_root(self.root):
+            self.fail(0, "venv", f"The folder is not writable: {self.root}")
             return False
 
         self.step(0, "running", "Searching for Python 3.12...")
         seed_python = find_supported_python(self.root)
         if seed_python is None:
             self.log("No supported Python 3.12 interpreter was found.")
-            self.step(0, "error", "Install Python 3.12 and enable Add python.exe to PATH.")
+            self.fail(0, "python")
             return False
         version = ".".join(str(part) for part in seed_python.version)
         self.log(f"Found Python: {seed_python.display} ({version})")
@@ -251,36 +451,51 @@ class BootstrapRunner:
         self.step(1, "running", "Preparing .venv...")
         expected_venv_python = venv_python_path(self.root)
         if seed_python.command != (str(expected_venv_python),):
-            if not self.run_process([*seed_python.command, "-m", "venv", ".venv"], 1):
+            if not self.run_process([*seed_python.command, "-m", "venv", ".venv"], 1, "venv"):
                 return False
         self.python = find_supported_python(self.root, include_venv=True)
         if self.python is None or self.python.command != (str(expected_venv_python),):
             self.log("The local .venv Python could not be verified after creation.")
-            self.step(1, "error", "Local Python environment was not created correctly.")
+            self.fail(1, "venv", "Local Python environment was not created correctly.")
             return False
         self.log(f"Using local runtime: {self.python.display}")
         self.step(1, "done", "Local .venv is ready.")
 
         self.step(2, "running", "Upgrading pip...")
-        pip_ok = self.run_process([*self.python.command, "-m", "pip", "install", "--upgrade", "pip"], 2, allow_failure=True)
+        pip_ok = self.run_process(
+            [*self.python.command, "-m", "pip", "install", "--upgrade", "pip"],
+            2,
+            "pip",
+            allow_failure=True,
+        )
         if pip_ok:
             self.step(2, "done", "pip is ready.")
 
         self.step(3, "running", "Installing requirements.txt...")
-        if not self.run_process([*self.python.command, "-m", "pip", "install", "-r", "requirements.txt"], 3):
+        if not self.run_process(
+            [*self.python.command, "-m", "pip", "install", "-r", "requirements.txt"],
+            3,
+            "pip",
+        ):
             return False
         self.step(3, "done", "Requirements installed.")
 
         self.step(4, "running", "Running installer.py...")
-        if not self.run_process(build_installer_command(self.python.command, bootstrap_frameworks), 4):
+        if not self.run_process(build_installer_command(self.python.command, bootstrap_frameworks), 4, "installer"):
             return False
         self.step(4, "done", "Installer completed.")
 
         self.step(5, "running", "Running sample verification...")
-        samples_ok = self.run_process([*self.python.command, "installer.py", "test-samples"], 5, allow_failure=True)
+        samples_ok = self.run_process(
+            [*self.python.command, "installer.py", "test-samples"],
+            5,
+            "samples",
+            allow_failure=True,
+        )
         if samples_ok:
             self.step(5, "done", "Sample verification completed.")
 
+        create_desktop_shortcut(self.root, self.python.command, self.log)
         self.step(6, "done", "Futa-Vision is ready to launch.")
         return True
 
@@ -290,9 +505,10 @@ class BootstrapperApp:
 
     def __init__(self, root_path: Path) -> None:
         import tkinter as tk
-        from tkinter import ttk
+        from tkinter import messagebox, ttk
 
         self.tk = tk
+        self.messagebox = messagebox
         self.ttk = ttk
         self.root_path = root_path
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -301,34 +517,55 @@ class BootstrapperApp:
 
         self.window = tk.Tk()
         self.window.title("Futa-Vision Setup")
-        self.window.geometry("860x640")
-        self.window.minsize(760, 560)
+        self.window.geometry("920x700")
+        self.window.minsize(800, 620)
+        self._apply_style()
 
         self.accept_adult = tk.BooleanVar(value=False)
         self.accept_privacy = tk.BooleanVar(value=False)
         self.bootstrap_frameworks = tk.BooleanVar(value=True)
         self.status_text = tk.StringVar(value="Ready to install Futa-Vision.")
+        self.error_text = tk.StringVar(value="")
         self.progress_value = tk.DoubleVar(value=0)
         self.step_labels: list[Any] = []
 
         self._build_ui()
         self.window.after(100, self._drain_events)
 
+    def _apply_style(self) -> None:
+        style = self.ttk.Style(self.window)
+        for theme in ("vista", "xpnative", "clam"):
+            if theme in style.theme_names():
+                style.theme_use(theme)
+                break
+        style.configure("Outer.TFrame", background="#f6f7fb")
+        style.configure("Card.TLabelframe", background="#ffffff", padding=14)
+        style.configure("Card.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
+        style.configure("Title.TLabel", font=("Segoe UI", 22, "bold"), background="#f6f7fb", foreground="#151922")
+        style.configure("Subtitle.TLabel", font=("Segoe UI", 10), background="#f6f7fb", foreground="#475467")
+        style.configure("Status.TLabel", font=("Segoe UI", 10, "bold"))
+        style.configure("Step.TLabel", font=("Segoe UI", 9))
+        style.configure("Error.TLabel", font=("Segoe UI", 10, "bold"), foreground="#b42318")
+        style.configure("Success.TLabel", font=("Segoe UI", 10, "bold"), foreground="#027a48")
+        style.configure("Muted.TLabel", foreground="#667085")
+        self.window.configure(bg="#f6f7fb")
+
     def _build_ui(self) -> None:
         tk = self.tk
         ttk = self.ttk
 
-        outer = ttk.Frame(self.window, padding=20)
+        outer = ttk.Frame(self.window, padding=24, style="Outer.TFrame")
         outer.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(outer, text="Futa-Vision Setup", font=("Segoe UI", 20, "bold")).pack(anchor=tk.W)
+        ttk.Label(outer, text="Futa-Vision Setup", style="Title.TLabel").pack(anchor=tk.W)
         ttk.Label(
             outer,
             text="A guided Windows installer for dependencies, local settings, framework bootstrap, and sample checks.",
             wraplength=800,
+            style="Subtitle.TLabel",
         ).pack(anchor=tk.W, pady=(4, 14))
 
-        consent = ttk.LabelFrame(outer, text="Before setup", padding=12)
+        consent = ttk.LabelFrame(outer, text="Before Setup", padding=14, style="Card.TLabelframe")
         consent.pack(fill=tk.X, pady=(0, 12))
         ttk.Checkbutton(
             consent,
@@ -348,19 +585,31 @@ class BootstrapperApp:
             variable=self.bootstrap_frameworks,
         ).pack(anchor=tk.W, pady=(4, 0))
 
-        progress_frame = ttk.LabelFrame(outer, text="Progress", padding=12)
+        progress_frame = ttk.LabelFrame(outer, text="Progress", padding=14, style="Card.TLabelframe")
         progress_frame.pack(fill=tk.X, pady=(0, 12))
         self.progress = ttk.Progressbar(progress_frame, variable=self.progress_value, maximum=len(BOOTSTRAP_STEPS))
         self.progress.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(progress_frame, textvariable=self.status_text).pack(anchor=tk.W, pady=(0, 8))
+        ttk.Label(progress_frame, textvariable=self.status_text, style="Status.TLabel").pack(anchor=tk.W, pady=(0, 8))
+        self.error_label = ttk.Label(progress_frame, textvariable=self.error_text, style="Error.TLabel", wraplength=820)
+        self.error_label.pack(anchor=tk.W, pady=(0, 8))
         for step in BOOTSTRAP_STEPS:
-            label = ttk.Label(progress_frame, text=f"Pending - {step.title}: {step.detail}", wraplength=780)
+            label = ttk.Label(progress_frame, text=f"Pending - {step.title}: {step.detail}", wraplength=820, style="Step.TLabel")
             label.pack(anchor=tk.W, pady=1)
             self.step_labels.append(label)
 
-        log_frame = ttk.LabelFrame(outer, text="Installer output", padding=8)
+        log_frame = ttk.LabelFrame(outer, text="Installer Output", padding=10, style="Card.TLabelframe")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
-        self.output = tk.Text(log_frame, height=12, wrap=tk.WORD, state=tk.DISABLED)
+        self.output = tk.Text(
+            log_frame,
+            height=12,
+            wrap=tk.WORD,
+            state=tk.DISABLED,
+            relief=tk.FLAT,
+            bg="#101828",
+            fg="#eaecf0",
+            insertbackground="#eaecf0",
+            font=("Consolas", 9),
+        )
         scrollbar = ttk.Scrollbar(log_frame, command=self.output.yview)
         self.output.configure(yscrollcommand=scrollbar.set)
         self.output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -370,19 +619,29 @@ class BootstrapperApp:
         buttons.pack(fill=tk.X)
         self.start_button = ttk.Button(buttons, text="Start Install", command=self.start_install)
         self.retry_button = ttk.Button(buttons, text="Retry", command=self.start_install, state=tk.DISABLED)
-        self.fallback_button = ttk.Button(buttons, text="Fallback Console Installer", command=self.run_fallback)
-        self.log_button = ttk.Button(buttons, text="Open Log", command=self.open_log)
+        self.fallback_button = ttk.Button(buttons, text="Try setup.bat Instead", command=self.run_fallback)
+        self.admin_button = ttk.Button(buttons, text="Restart as Admin", command=self.restart_as_admin, state=tk.DISABLED)
+        self.log_button = ttk.Button(buttons, text="Show Logs", command=self.open_log)
         self.launch_button = ttk.Button(buttons, text="Launch Futa-Vision", command=self.launch_app, state=tk.DISABLED)
         self.start_button.pack(side=tk.LEFT)
         self.retry_button.pack(side=tk.LEFT, padx=(8, 0))
         self.fallback_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.admin_button.pack(side=tk.LEFT, padx=(8, 0))
         self.log_button.pack(side=tk.LEFT, padx=(8, 0))
         self.launch_button.pack(side=tk.RIGHT)
+        self._update_admin_state()
         self._update_start_state()
 
     def _update_start_state(self) -> None:
         allowed = self.accept_adult.get() and self.accept_privacy.get() and self.worker is None
         self.start_button.configure(state=self.tk.NORMAL if allowed else self.tk.DISABLED)
+
+    def _update_admin_state(self) -> None:
+        if should_offer_admin(self.root_path):
+            self.admin_button.configure(state=self.tk.NORMAL)
+            self.error_text.set("This folder is not writable. Restart as administrator or move Futa-Vision to a writable folder.")
+        else:
+            self.admin_button.configure(state=self.tk.DISABLED)
 
     def emit(self, event: str, payload: Any) -> None:
         self.events.put((event, payload))
@@ -404,6 +663,12 @@ class BootstrapperApp:
         step = BOOTSTRAP_STEPS[index]
         suffix = message or step.detail
         self.step_labels[index].configure(text=f"{prefixes.get(status, status.title())} - {step.title}: {suffix}")
+        if status == "running":
+            self.progress.configure(mode="indeterminate")
+            self.progress.start(14)
+        else:
+            self.progress.stop()
+            self.progress.configure(mode="determinate")
         done_count = sum(
             1
             for label in self.step_labels
@@ -423,13 +688,25 @@ class BootstrapperApp:
             elif event == "step":
                 index, status, message = payload
                 self._set_step(index, status, message)
+            elif event == "failure":
+                self.progress.stop()
+                self.progress.configure(mode="determinate")
+                self.error_text.set(str(payload))
+                self.retry_button.configure(state=self.tk.NORMAL)
+                self.fallback_button.configure(state=self.tk.NORMAL)
             elif event == "done":
                 success, python_command = payload
                 self.worker = None
                 self.python_command = python_command
+                self.progress.stop()
+                self.progress.configure(mode="determinate")
                 self.retry_button.configure(state=self.tk.NORMAL)
                 self.launch_button.configure(state=self.tk.NORMAL if success else self.tk.DISABLED)
-                self.status_text.set("Setup complete." if success else "Setup needs attention. Review the output or open the log.")
+                if success:
+                    self.error_text.set("")
+                    self.status_text.set("Setup complete. Futa-Vision is ready to launch.")
+                else:
+                    self.status_text.set("Setup needs attention. Review the output, show logs, or try setup.bat instead.")
                 self._update_start_state()
         self.window.after(100, self._drain_events)
 
@@ -439,9 +716,21 @@ class BootstrapperApp:
         if not self.accept_adult.get() or not self.accept_privacy.get():
             self.status_text.set("Accept both setup acknowledgements before starting.")
             return
+        if should_offer_admin(self.root_path):
+            use_admin = self.messagebox.askyesno(
+                "Administrator rights may be needed",
+                "The Futa-Vision folder is not writable. Restart this installer as administrator?",
+            )
+            if use_admin and relaunch_as_admin(self.root_path):
+                self.window.destroy()
+                return
+            self.error_text.set("Setup cannot continue until the folder is writable.")
+            self.admin_button.configure(state=self.tk.NORMAL)
+            return
         self.output.configure(state=self.tk.NORMAL)
         self.output.delete("1.0", self.tk.END)
         self.output.configure(state=self.tk.DISABLED)
+        self.error_text.set("")
         for index, step in enumerate(BOOTSTRAP_STEPS):
             self.step_labels[index].configure(text=f"Pending - {step.title}: {step.detail}")
         self.progress_value.set(0)
@@ -458,6 +747,12 @@ class BootstrapperApp:
 
         self.worker = threading.Thread(target=worker_main, daemon=True)
         self.worker.start()
+
+    def restart_as_admin(self) -> None:
+        if relaunch_as_admin(self.root_path):
+            self.window.destroy()
+        else:
+            self.error_text.set("Could not restart as administrator. Move the folder to a writable location or use setup.bat.")
 
     def open_log(self) -> None:
         log_path = self.root_path / "logs" / "installer.log"

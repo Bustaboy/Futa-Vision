@@ -97,3 +97,41 @@ def test_utf8_env_preserves_existing_values_and_sets_defaults(monkeypatch) -> No
     assert env["EXISTING"] == "1"
     assert env["PYTHONUTF8"] == "1"
     assert env["PYTHONIOENCODING"] == "utf-8:replace"
+
+
+def test_friendly_status_from_output_extracts_high_signal_updates() -> None:
+    assert bootstrapper.friendly_status_from_output("Collecting numpy==2.2.6") == "Resolving dependency: numpy==2.2.6"
+    assert bootstrapper.friendly_status_from_output("Downloading torch.whl") == "Downloading: torch.whl"
+    assert bootstrapper.friendly_status_from_output("Installing collected packages: rich") == "Installing collected Python packages..."
+    assert bootstrapper.friendly_status_from_output("Running command: python -m comfy_cli install") == "Installing ComfyUI portable framework..."
+    assert bootstrapper.friendly_status_from_output("") is None
+
+
+def test_can_write_to_root_uses_temporary_probe(tmp_path: Path) -> None:
+    assert bootstrapper.can_write_to_root(tmp_path) is True
+    assert not (tmp_path / ".bootstrapper_write_test").exists()
+
+
+def test_should_offer_admin_only_when_windows_non_admin_and_unwritable(monkeypatch) -> None:
+    monkeypatch.setattr(bootstrapper, "is_windows", lambda: True)
+    monkeypatch.setattr(bootstrapper, "is_running_as_admin", lambda: False)
+    monkeypatch.setattr(bootstrapper, "can_write_to_root", lambda root: False)
+
+    assert bootstrapper.should_offer_admin(Path("C:/Protected")) is True
+
+    monkeypatch.setattr(bootstrapper, "can_write_to_root", lambda root: True)
+    assert bootstrapper.should_offer_admin(Path("C:/Writable")) is False
+
+
+def test_launch_script_uses_local_venv_python() -> None:
+    script = bootstrapper.launch_script_text()
+
+    assert "\".venv\\Scripts\\python.exe\" main.py" in script
+    assert script.startswith("@echo off")
+
+
+def test_create_desktop_shortcut_skips_non_windows(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(bootstrapper, "is_windows", lambda: False)
+
+    assert bootstrapper.create_desktop_shortcut(tmp_path, ("python",)) is False
+    assert not (tmp_path / "Launch Futa-Vision.bat").exists()

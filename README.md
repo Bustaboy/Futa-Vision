@@ -25,10 +25,12 @@ Futa-Vision now includes a beginner-friendly Phase 5 installer. The installer is
    - install `requirements.txt`,
    - run the Phase 5 installer/repair checks with Minimal as the recommended tier,
    - run a quick sample verification,
+   - create a desktop launcher shortcut when setup succeeds,
    - offer to launch the Gradio app.
-4. If the visual installer cannot continue, click **Fallback Console Installer** or run `setup.bat` manually from the same folder.
-5. When the app opens, go to **⚙️ Settings** and run **Health Check**. The top line should say **All systems ready** or explain what needs attention, such as missing models.
-6. Use **Settings → Model Downloader** to search models by category, read strengths/weaknesses/recommended use cases, and download missing models with progress feedback.
+4. The visual installer shows live progress for dependency installs, framework bootstrap, installer checks, and sample verification. Use **Show Logs** to open `logs/installer.log`.
+5. If the visual installer cannot continue, click **Try setup.bat Instead** or run `setup.bat` manually from the same folder. If the app folder is not writable, the installer can restart with administrator rights.
+6. When the app opens, go to **⚙️ Settings** and run **Health Check**. The top line should say **All systems ready** or explain what needs attention, such as missing models.
+7. Use **Settings → Model Downloader** to search models by category, read strengths/weaknesses/recommended use cases, and download missing models with progress feedback.
 
 Packaged release builds should create `FutaVisionSetup.exe` from `windows_bootstrapper.py` with PyInstaller:
 
