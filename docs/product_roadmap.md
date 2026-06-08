@@ -703,113 +703,117 @@ Core design principles:
 
 The creator should encourage a wide variety of adult fantasy partners rather than limiting users to a few archetypes. Race/type selection should be extensible through JSON race packs.
 
-Recommended built-in categories:
+Recommended built-in categories should cover roughly **80-85%+ of common fantasy/futa search demand** while leaving room for rare high-creativity concepts. The initial taxonomy should include both mainstream archetypes and distinctive material/race systems that other tools rarely support well.
 
-- **Humanoid / humanlike**
-  - athletic;
-  - soft-body;
-  - tall elegant;
-  - muscular;
-  - petite adult;
-  - mature adult;
-  - stylized 3D anime model.
-- **Demon / devil / succubus**
-  - horns;
-  - tails;
-  - wings;
-  - skin gradients;
-  - glowing markings;
-  - dominant or seductive behavior presets;
-  - high-contrast lighting presets.
-- **Elf / dark elf / high elf**
-  - ear shape and length;
-  - elegant proportions;
-  - refined facial presets;
-  - fantasy skin tones;
-  - jewelry/outfit accents.
+- **Human / humanoid / baseline anime-3D**
+  - athletic, soft-body, tall elegant, muscular, petite adult, mature adult, stylized semi-realistic 3D anime;
+  - safest starting point for new users and the control group for General Physics Base LoRA validation.
+- **Demon / succubus / devil / tiefling-adjacent**
+  - horns, tails, wings, fangs, skin gradients, glowing markings, infernal palettes, high-contrast lighting;
+  - strong futa-on-male presets with confident/dominant, playful, elegant, or monstrous behavior tags.
+- **Tiefling / horned fantasy humanoid**
+  - smaller horn/tail variants than full demon;
+  - fantasy skin tones, subtle glowing markings, elegant face/body presets;
+  - useful for users who want demon-coded visuals without heavy wings or monstrous traits.
+- **Elf family: high elf / dark elf / wood elf / moon elf**
+  - ear shape/length, elegant proportions, refined facial presets, jewelry, fantasy skin tones, moonlit/forest/underdark lighting presets;
+  - optional graceful motion and high style/rendering emphasis.
 - **Orc / oni / ogre-inspired**
-  - muscular/heavy body shapes;
-  - tusks/fangs;
-  - strong pressure/weight-transfer physics emphasis;
-  - fantasy skin colors;
-  - large-body motion presets.
-- **Angel / celestial**
-  - wings;
-  - halo/glow accents;
-  - soft luminous materials;
-  - gentle/commanding personality variants;
-  - feather motion considerations.
-- **Vampire / gothic**
-  - pale or stylized skin;
-  - fangs;
-  - eye glow;
-  - gothic outfits;
-  - nocturnal lighting presets.
-- **Kitsune / fox hybrid**
-  - ears;
-  - one or multiple tails;
-  - tail fur color;
-  - playful/teasing behavior tags;
-  - tail secondary-motion emphasis.
-- **Cat hybrid / neko**
-  - ears;
-  - tail;
-  - paw/marking options;
-  - agile body presets;
-  - playful expression presets.
-- **Wolf hybrid / werewolf / canine hybrid**
-  - ears;
-  - tail;
-  - fur accents;
-  - stronger build options;
-  - intensity and stamina behavior tags.
+  - muscular or heavy body shapes, tusks/fangs, fantasy skin colors, strong body-weight transfer, heavy-contact physics emphasis;
+  - useful for stress-testing scale, pressure response, and large-body motion.
+- **Goblin / imp / short fantasy humanoid**
+  - compact adult body proportions, large ears, mischievous expressions, green/grey/red fantasy skin palettes;
+  - requires explicit adult-only metadata and proportion validation to avoid ambiguous outputs.
+- **Troll / giantkin**
+  - tall or bulky forms, stone/forest/ice skin variants, heavy limbs, tusks, rough material textures;
+  - default to slower motion presets and strong contact/weight-transfer review.
+- **Angel / celestial / seraphic**
+  - wings, halo/glow accents, luminous skin/materials, feathers, soft radiant lighting, gentle/commanding personality variants;
+  - wing visibility, wing collision, and feather continuity checks.
+- **Vampire / gothic / nocturnal**
+  - fangs, pale or stylized skin, red/bright eye variants, gothic outfits, dark romantic lighting, nocturnal ambience;
+  - identity locks for eye/fang stability and outfit continuity.
+- **Kitsune / fox spirit**
+  - fox ears, one or multiple tails, tail fur color, shrine/spirit accents, playful/teasing/elegant behavior tags;
+  - tail-count consistency and secondary-motion emphasis.
+- **Cat hybrid / neko / feline beastkin**
+  - ears, tail, fur accents, markings, agile body presets, playful expression presets;
+  - tail/ear continuity, hair/ear separation, and accessory conflict checks.
+- **Wolf / canine / werewolf / dog hybrid**
+  - ears, tail, fur accents, stronger builds, feral-to-humanoid slider, intensity/stamina behavior tags;
+  - optional full-moon lighting and stronger motion/recoil presets.
+- **Bunny / rabbit hybrid**
+  - long ears, small tail, soft-body presets, springy/agile motion options, pastel or nightclub palettes;
+  - ear continuity and silhouette readability checks.
+- **Satyr / faun / goat hybrid**
+  - horns, goat ears, tail, optional hoof-like stylization, woodland/fantasy outfit accents;
+  - leg stylization should remain optional and conservative for model stability.
+- **Minotaur / bovine hybrid**
+  - horns, ears, tail, muscular/heavy-body presets, large-frame movement;
+  - strong pressure/weight-transfer presets and region guidance for horns.
+- **Centaur / tauric fantasy form**
+  - advanced/experimental race pack because nonstandard lower-body anatomy is difficult for video models;
+  - should require explicit warnings, specialized ControlNet references, and likely RunPod quality mode.
 - **Dragonkin / draconic hybrid**
-  - horns;
-  - scales;
-  - tail;
-  - wings;
-  - claws;
-  - scale color/material;
-  - heavy/serpentine motion emphasis.
-- **Lizard/reptile hybrid**
-  - scale patterns;
-  - tail shape;
-  - gloss level;
-  - eye shapes;
-  - texture continuity locks.
-- **Bunny/deer/goat/horse hybrid**
-  - ears/horns/antlers;
-  - tail variants;
-  - leg/hoof stylization limits;
-  - soft fantasy presets.
-- **Harpy / avian hybrid**
-  - wings;
-  - feather accents;
-  - talon stylization limits;
-  - feather color/material;
-  - wing collision/visibility controls.
-- **Alien / cosmic / synthetic humanoid**
-  - unusual skin/material colors;
-  - markings;
-  - glowing accents;
-  - cybernetic details;
-  - nonhuman but readable anatomy constraints.
-- **Robot / android / biomechanical**
-  - synthetic skin;
-  - panel lines;
-  - emissive accents;
-  - glossy material;
-  - mechanical outfit/accessory constraints.
-- **Slime**
-  - fully slime partner;
-  - humanoid slime;
-  - slime futa;
-  - partial slime overlays;
-  - translucent material profiles.
+  - horns, scales, tail, wings, claws, scale color/material, serpentine/heavy motion presets;
+  - trait stability checks for scales, wings, tail, and horn symmetry.
+- **Lizardfolk / reptilian / naga / serpent hybrid**
+  - scale patterns, tails, slit pupils, gloss controls, optional serpentine lower-body experimental mode;
+  - naga/serpent lower bodies should be advanced-mode only due to anatomy/model instability.
+- **Harpy / avian / bird hybrid**
+  - wings, feathers, talon stylization limits, feather color/material, wing collision and visibility controls;
+  - review checks for wings vanishing, extra limbs, and feather flicker.
+- **Mermaid / siren / aquatic**
+  - aquatic skin/scale accents, fins, wet-gloss lighting, optional tail-form experimental mode, singing/siren personality tags;
+  - strong material/lighting presets and continuity checks for fins/scales.
+- **Arachne / spider hybrid**
+  - advanced/experimental race pack with extra-limb warnings, spider-leg silhouette options, web accents, dark fantasy palettes;
+  - requires strict region controls and negative prompts for limb multiplication errors.
+- **Android / cyborg / synthetic / biomechanical**
+  - synthetic skin, panel lines, cybernetic seams, emissive accents, glossy material, mechanical accessories;
+  - benefits from material consistency scoring and hard-surface/soft-skin separation.
+- **Alien / cosmic / starborn**
+  - unusual skin/material colors, markings, glowing accents, nonhuman eyes, cosmic lighting, readable humanoid anatomy constraints;
+  - supports creative color palettes while preserving body readability.
+- **Slime / ooze / gel humanoid**
+  - fully slime partner, humanoid slime, slime futa, partial slime overlays, translucent material profiles;
+  - dedicated controls for viscosity, translucency, bubble density, flow, cohesion, gloss, and shape stability.
+- **Eldritch / void-touched — rare high creative potential**
+  - tentacle-like shadow appendages, abyssal glow, void halos, reality-distortion accents, smoky/shadow material, non-Euclidean visual motifs;
+  - must remain readable as an adult humanoid partner and should include strong negative prompts for anatomy collapse, excess limbs, and visual noise.
+- **Living latex / sentient rubber — rare high creative potential**
+  - hyper-stretchy shiny material, elastic body response, transformative surface behavior, high-gloss black/color latex palettes, seamless suit/body ambiguity;
+  - useful for surreal material physics, intense deformation studies, and hybrid combinations with slime or dragonkin; should include gloss/flicker and shape-retention review checks.
 - **Hybrid/fusion mode**
-  - combine one primary race with one secondary trait pack;
-  - e.g. demon kitsune, slime elf, vampire dragonkin;
-  - conflict warnings for traits likely to destabilize generation.
+  - combine one primary race with one secondary trait/material pack;
+  - examples: Eldritch Slime Futa, Void-Touched Demon, Latex Dragonkin, Slime Elf, Vampire Kitsune, Android Succubus, Dragonkin Slime, Latex Cat Hybrid;
+  - includes a conflict detector for too many appendages, incompatible materials, contradictory colors, unstable lower bodies, and likely 8 GB VRAM difficulty.
+
+### Race-pack metadata and controls
+
+Each race/species pack should be more than a label. It should define the UI controls, prompt fragments, negative prompts, preview defaults, validation checks, and trainability warnings needed for that archetype. A race pack should include:
+
+- **Identity traits:** required and optional visual markers, such as horns, ears, tails, wings, scales, fins, glowing markings, synthetic seams, or void appendages.
+- **Material traits:** skin, fur, scale, feather, slime, latex, synthetic, metallic, glowing, shadow, glassy, or wet-gloss behavior.
+- **Motion traits:** heavy-body motion, agile motion, tail/wing secondary motion, serpentine motion, elastic material response, or stable humanoid motion.
+- **Prompt fragments:** identity prompt, material prompt, style prompt, physics prompt, and race-specific negative prompt.
+- **Preview defaults:** best initial camera framing, lighting, seed strategy, and low-res preview count.
+- **Training hints:** recommended LoRA rank range, minimum starter-image diversity, caption priorities, and traits that should be locked.
+- **Review checks:** what the scorer should watch for, such as tail count, wing persistence, scale continuity, slime shape stability, latex gloss flicker, or eldritch visual noise.
+- **Hardware warnings:** whether the race is safe for RTX 4070 local-low-VRAM, better in RunPod quality mode, or experimental.
+
+Race packs should be composable but not unlimited. The UI should recommend one primary race plus one optional secondary trait/material pack. If the user combines more than two complex packs, the creator should show instability warnings and recommend preview validation before LoRA training.
+
+### Popularity coverage strategy
+
+The built-in taxonomy should prioritize what creators are most likely to search for while still giving Futa-Vision a distinctive creative edge:
+
+1. **Core high-demand fantasy:** human/humanoid, demon/succubus, elf, orc/oni, vampire, angel, cat/neko, fox/kitsune, wolf/werewolf, dragonkin.
+2. **Strong secondary demand:** bunny, goblin, tiefling, slime, android/cyborg, alien/cosmic, lizardfolk/naga, harpy, mermaid/siren.
+3. **Advanced body-plan demand:** centaur, arachne, minotaur, troll/giantkin, satyr/faun.
+4. **Signature Futa-Vision surreal niches:** Eldritch/Void-Touched and Living Latex/Sentient Rubber, especially when combined with slime or demon/dragonkin traits.
+
+This approach keeps quick mode approachable while making advanced mode feel unusually deep compared with generic AI prompt tools.
 
 ### Deep customization sections
 
@@ -1264,12 +1268,12 @@ Because the creator outputs both rich prompts and metadata, it powers later syst
 
 - A basic user can create a partner from fewer than 6 required choices and generate starter images within one guided flow.
 - An advanced user can define a detailed fantasy futa, slime partner, or slime futa using adaptive fields without manually writing a full prompt.
-- At least 12 built-in race/type categories are available at launch, with schema support for more.
-- Slime mode exposes viscosity, translucency, bubble density, flow intensity, shape stability, color/tint, gloss, and cohesion controls.
+- At least 24 built-in race/type categories are available at launch, covering mainstream fantasy demand plus rare high-creativity material/race systems such as Eldritch/Void-Touched and Living Latex/Sentient Rubber.
+- Slime mode exposes viscosity, translucency, bubble density, flow intensity, shape stability, color/tint, gloss, cohesion, reformation, and slime-futa shape-retention controls.
 - Starter image batches correctly enter the 40/40/20 weighted scoring loop.
 - Approved characters train into LoRAs and register in the Character Library with complete JSON metadata.
 - Editing a saved profile can regenerate previews without overwriting the locked trained LoRA unless the user chooses to train a new version.
-- Race/type traits remain stable across at least 10 validation images after LoRA training.
+- Race/type traits remain stable across at least 10 validation images after LoRA training for standard races and across a smaller explicitly marked experimental benchmark for difficult forms such as centaur, naga, arachne, eldritch, and living-latex hybrids.
 - Partner LoRAs do not leak unrelated visual traits into other partners in back-to-back generation tests.
 
 ### Dependencies
@@ -1736,8 +1740,8 @@ Phase 7 makes Futa-Vision feel like a learning local studio. The user no longer 
 
 - Ollama detection and model selection work in first-run setup.
 - Local LLM produces valid structured edit intents for at least 90% of common chat edit requests in a test suite.
-- Character Creator assistant can generate a complete draft profile from a short concept and selected race/type.
-- Guided session can generate 3-4 targeted clips, ask focused questions, parse feedback, and save structured lessons.
+- Character Creator assistant can generate a complete draft profile from a short concept and selected race/type, including appropriate adaptive fields for slime, eldritch, living-latex, animal-hybrid, and synthetic/material-heavy profiles.
+- Guided session can generate 3-4 targeted clips, ask focused conversational questions, parse free-form feedback into structured lessons, ask follow-up questions when ambiguous, and save those lessons to the correct memory category.
 - At least one light General Physics Base LoRA delta can be trained from approved examples and compared against the current base.
 - No incremental update can overwrite the promoted base LoRA without explicit user approval.
 - The system can distinguish general physics lessons from character-specific visual identity lessons.
@@ -1958,6 +1962,15 @@ Key features:
   - android/synthetic;
   - alien/cosmic;
   - avian/harpy;
+  - goblin/imp;
+  - troll/giantkin;
+  - minotaur;
+  - satyr/faun;
+  - centaur/tauric experimental;
+  - mermaid/siren/aquatic;
+  - arachne/spider hybrid experimental;
+  - eldritch/void-touched;
+  - living latex/sentient rubber;
   - additional community-defined packs.
 - Race-specific consistency checks:
   - horns stay present;
@@ -2452,6 +2465,13 @@ These ideas are intentionally expansive and can be prioritized, trimmed, or post
 - Continuity memory that follows a character across multiple videos.
 - Automatic reminders when a requested edit conflicts with the scene bible.
 - Reusable director styles for creators who repeatedly prefer the same lighting, rhythm, camera, and material behavior.
+
+### Rare-race and surreal-material labs
+
+- Experimental preview sandboxes for difficult forms such as centaur, naga, arachne, eldritch, and living latex.
+- Extra validation prompts for appendage count, silhouette readability, material flicker, and anatomy collapse.
+- RunPod-quality recommendations for race packs that are unlikely to be reliable on 8 GB local hardware.
+- Community-submitted rare-race packs with compatibility badges and known-failure notes.
 
 ---
 
