@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,8 @@ DEFAULT_STRATEGY = (
 )
 DEFAULT_RESOLUTION = "1280x720 (720p)"
 DEFAULT_UPSCALERS = ["SeedVR 2.5", "RTX Video SR", "Nomos2"]
+CLOUD_MODE_OPTIONS = ["Local", "Cloud", "Auto"]
+DEFAULT_CLOUD_MODE = "Auto"
 
 
 @dataclass(slots=True)
@@ -36,6 +38,18 @@ class GPUInfo:
     used_vram_gb: float | None
     free_vram_gb: float | None
     source: str
+
+
+@dataclass(slots=True)
+class CloudModeStatus:
+    """Hardware-only decision support for Phase 4.1 hybrid cloud mode."""
+
+    selected_mode: str
+    recommended_execution: str
+    cloud_recommended: bool
+    local_available: bool
+    reason: str
+    fallback_policy: list[str]
 
 
 @dataclass(slots=True)
@@ -55,6 +69,8 @@ class HardwareReport:
     minimum_recommended_cache_gb: float
     recommendations: list[str]
     warnings: list[str]
+    cloud_mode_options: list[str] = field(default_factory=lambda: list(CLOUD_MODE_OPTIONS))
+    default_cloud_mode: str = DEFAULT_CLOUD_MODE
 
 
 def _round_gb(value: float | None) -> float | None:
@@ -256,7 +272,96 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
         minimum_recommended_cache_gb=MIN_RECOMMENDED_CACHE_GB,
         recommendations=recommendations,
         warnings=warnings,
+        cloud_mode_options=list(CLOUD_MODE_OPTIONS),
+        default_cloud_mode=DEFAULT_CLOUD_MODE,
     )
+
+
+def normalize_cloud_mode(mode: str | None) -> str:
+    """Normalize UI cloud mode values to Local / Cloud / Auto."""
+
+    value = (mode or DEFAULT_CLOUD_MODE).strip().lower()
+    if value.startswith("local"):
+        return "Local"
+    if value.startswith("cloud") or value.startswith("runpod"):
+        return "Cloud"
+    return "Auto"
+
+
+def cloud_mode_status(
+    selected_mode: str | None = DEFAULT_CLOUD_MODE,
+    report: HardwareReport | None = None,
+) -> CloudModeStatus:
+    """Return hardware-based Local/Cloud/Auto guidance for Phase 4.1.
+
+    This intentionally does not check RunPod credentials; ``cloud_manager`` adds
+    provider availability.  RTX 4070 8 GB compatibility means Auto stays local
+    for normal 720p jobs when CUDA exists, while Cloud is recommended when CUDA
+    is unavailable or the user explicitly selects Cloud.
+    """
+
+    mode = normalize_cloud_mode(selected_mode)
+    active_report = report or collect_hardware_report()
+    local_available = active_report.gpu.cuda_available
+    fallback_policy = [
+        "Local: 720p, batch size 1, FP8/GGUF or INT8 where supported.",
+        "Auto: keep RTX 4070-class jobs local unless CUDA is unavailable or OOM occurs.",
+        "Cloud: use RunPod for no-CUDA systems, repeated OOM, heavy Wan clips, long extension, training, or final upscale.",
+    ]
+
+    if mode == "Local":
+        return CloudModeStatus(
+            selected_mode=mode,
+            recommended_execution="Local",
+            cloud_recommended=False,
+            local_available=local_available,
+            reason="User selected Local; cloud remains a manual fallback only.",
+            fallback_policy=fallback_policy,
+        )
+    if mode == "Cloud":
+        return CloudModeStatus(
+            selected_mode=mode,
+            recommended_execution="Cloud",
+            cloud_recommended=True,
+            local_available=local_available,
+            reason="User selected Cloud; RunPod availability is checked by cloud_manager.",
+            fallback_policy=fallback_policy,
+        )
+    if not local_available:
+        return CloudModeStatus(
+            selected_mode=mode,
+            recommended_execution="Cloud",
+            cloud_recommended=True,
+            local_available=False,
+            reason="Auto selected Cloud because CUDA is unavailable.",
+            fallback_policy=fallback_policy,
+        )
+    return CloudModeStatus(
+        selected_mode=mode,
+        recommended_execution="Local",
+        cloud_recommended=False,
+        local_available=True,
+        reason="Auto selected Local with low-VRAM defaults; use RunPod only after OOM or for heavy jobs.",
+        fallback_policy=fallback_policy,
+    )
+
+
+def cloud_mode_status_markdown(selected_mode: str | None = DEFAULT_CLOUD_MODE) -> str:
+    """Render hardware-only cloud mode guidance for UI/tests."""
+
+    status = cloud_mode_status(selected_mode)
+    lines = [
+        "## Hybrid Mode Selector",
+        f"- **Selected:** `{status.selected_mode}`",
+        f"- **Recommended execution:** `{status.recommended_execution}`",
+        f"- **Local CUDA available:** {status.local_available}",
+        f"- **Cloud recommended:** {status.cloud_recommended}",
+        f"- **Reason:** {status.reason}",
+        "",
+        "### Fallback policy",
+    ]
+    lines.extend(f"- {item}" for item in status.fallback_policy)
+    return "\n".join(lines)
 
 
 def get_low_vram_settings() -> dict[str, Any]:
@@ -294,6 +399,9 @@ def get_low_vram_settings() -> dict[str, Any]:
         "resolution": DEFAULT_RESOLUTION,
         "device": "cuda" if report.gpu.cuda_available else "cpu_or_runpod",
         "runpod_recommended": report.recommended_mode == "cloud_recommended",
+        "cloud_mode_options": list(CLOUD_MODE_OPTIONS),
+        "default_cloud_mode": DEFAULT_CLOUD_MODE,
+        "cloud_mode_status": asdict(cloud_mode_status(DEFAULT_CLOUD_MODE, report)),
         "estimated_minutes_per_epoch": 6 if low_vram else 3,
         "hardware_summary": {
             "gpu": report.gpu.name,
@@ -325,6 +433,8 @@ def report_to_markdown(report: HardwareReport) -> str:
         f"- **VRAM free:** {gpu.free_vram_gb if gpu.free_vram_gb is not None else 'unknown'} GiB",
         f"- **Detection source:** {gpu.source}",
         f"- **PyTorch import available:** {report.python_torch_available}",
+        f"- **Cloud mode options:** {', '.join(report.cloud_mode_options or CLOUD_MODE_OPTIONS)}",
+        f"- **Default cloud mode:** {report.default_cloud_mode}",
         "",
         "### Disk Cache",
         f"- **Cache path:** {report.cache_path}",
