@@ -26,7 +26,7 @@ runpod==1.9.1
 # Environment/config/runtime helpers.
 # Phase 0.5 keeps python-dotenv for `.env` app gating and training-engine path discovery.
 python-dotenv==1.2.2
-pydantic==2.12.4
+pydantic>=2.0
 pydantic-settings==2.12.0
 PyYAML==6.0.3
 requests==2.32.5
