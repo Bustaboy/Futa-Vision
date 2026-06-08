@@ -269,6 +269,13 @@ def preview_scene_characters(selected_character_ids: str) -> tuple[list[tuple[st
     return gallery, "\n".join(lines)
 
 
+def creator_profile_to_scoring_loop(*creator_args: Any) -> tuple[str, str, str, str, str, str, str, Any]:
+    """Create a Character Creator profile and populate the existing scoring form."""
+
+    status, metadata_json, prompt, name, trigger, tags, seed_scores = character_creator.create_character_handoff(*creator_args)
+    return status, metadata_json, prompt, name, trigger, tags, seed_scores, gr.update(selected="Create Partner")
+
+
 def score_partner_batch(
     anatomy: float,
     physics: float,
@@ -1262,6 +1269,20 @@ def build_ui() -> gr.Blocks:
                     score_partner_batch,
                     inputs=[anatomy, physics, style, prior_scores, character_name, trigger_word, tag_text, partner_prompt, base_image, save_as_fixed_male, allow_fixed_male_overwrite],
                     outputs=[score_output, generated_scores, registration_json],
+                )
+                character_creator_components["create_character_button"].click(
+                    creator_profile_to_scoring_loop,
+                    inputs=character_creator_components["create_character_inputs"],
+                    outputs=[
+                        *character_creator_components["create_character_internal_outputs"],
+                        partner_prompt,
+                        character_name,
+                        trigger_word,
+                        tag_text,
+                        prior_scores,
+                        app_tabs,
+                    ],
+                    show_progress="full",
                 )
 
             with gr.Tab("Generate Video", id="Generate Video", visible=initial_interactive) as generate_tab:
