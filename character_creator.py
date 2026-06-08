@@ -11,7 +11,10 @@ metadata later preview runners can consume.
 from __future__ import annotations
 
 import json
+import os
 import random
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +25,8 @@ import gradio as gr
 SCHEMA_VERSION = "character_profile.v1"
 PREVIEW_WORKFLOW_VERSION = "phase5.5.low_res_character_preview.v1"
 DEFAULT_PREVIEW_WORKFLOW_PATH = Path("workflows/comfy/character_creator_low_res_preview.json")
+COMFYUI_URL_ENV_KEYS = ("FUTA_VISION_COMFYUI_URL", "COMFYUI_URL", "COMFYUI_HOST")
+COMFYUI_PREVIEW_TIMEOUT_SECONDS = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +123,49 @@ def section_visibility(race: str) -> list[Any]:
 
     visible = set(_pack_for(race).sections)
     return [gr.update(visible=name in visible) for name in SECTION_LABELS]
+
+
+def adaptive_race_update(race: str) -> list[Any]:
+    """Update race guidance, adaptive sections, and race-sensitive defaults together.
+
+    Grouping these outputs behind one race-change event keeps the UI feeling
+    instant and avoids a short-lived mismatch where the guidance updates before
+    the controls do.  Defaults are intentionally conservative and only touch
+    fields that are strongly implied by the selected race.
+    """
+
+    pack = _pack_for(race)
+    sections = set(pack.sections)
+    tail_count = 3 if pack.label == "Kitsune" else 1 if "tails" in sections else 0
+    animal_ears = "fox" if pack.label == "Kitsune" else "cat" if pack.label == "Cat/Neko" else "wolf" if pack.label == "Wolf/Werewolf" else "bunny" if pack.label == "Bunny Hybrid" else "none"
+    horn_style = "curved demon horns" if pack.label in {"Demon/Succubus", "Tiefling"} else "dragon horns" if pack.label == "Dragonkin" else "bovine horns" if pack.label == "Minotaur" else "small swept horns" if "horns" in sections else "none"
+    wing_style = "feathered wings" if pack.label in {"Angel", "Harpy"} else "bat-like wings" if pack.label == "Demon/Succubus" else "dragon wings" if pack.label == "Dragonkin" else "none"
+    scale_pattern = "arm and shoulder scales" if "scales" in sections else "none"
+    synthetic_finish = "gloss panels" if "synthetic" in sections else "none"
+    alien_palette = "violet glow" if "alien" in sections or "eldritch" in sections else "natural dark"
+    motion_emphasis = (
+        "elastic material response"
+        if {"slime", "latex"} & sections
+        else "tail/wing secondary motion"
+        if {"tails", "wings"} & sections
+        else "heavy-body weight transfer"
+        if "large_body" in sections
+        else "stable humanoid motion"
+    )
+    futa_category = "Slime-integrated" if "slime" in sections else "Latex-integrated" if "latex" in sections else "Balanced"
+    return [
+        race_guidance_markdown(race),
+        *section_visibility(race),
+        gr.update(value=futa_category),
+        gr.update(value=animal_ears),
+        gr.update(value=tail_count),
+        gr.update(value=horn_style),
+        gr.update(value=wing_style),
+        gr.update(value=scale_pattern),
+        gr.update(value=synthetic_finish),
+        gr.update(value=alien_palette),
+        gr.update(value=motion_emphasis),
+    ]
 
 
 def mode_visibility(mode: str) -> tuple[Any, Any]:
@@ -250,30 +298,161 @@ def metadata_json(*args: Any) -> str:
     return json.dumps(build_character_metadata(*args), indent=2, sort_keys=True)
 
 
-def preview_character(*args: Any) -> tuple[str, str, None]:
-    """Build a low-res ComfyUI preview request payload for the selected profile."""
+def _configured_comfyui_url() -> str | None:
+    """Return a normalized ComfyUI base URL from supported environment keys."""
 
-    metadata = build_character_metadata(*args)
-    workflow_exists = DEFAULT_PREVIEW_WORKFLOW_PATH.exists()
-    payload = {
-        "workflow_version": PREVIEW_WORKFLOW_VERSION,
-        "workflow_path": str(DEFAULT_PREVIEW_WORKFLOW_PATH),
-        "workflow_found": workflow_exists,
-        "resolution": "512x768",
-        "steps": 12,
-        "cfg": 4.5,
-        "sampler": "low_vram_preview_default",
-        "seed_strategy": "random unless locked by later phases",
-        "prompt": metadata["prompts"]["identity"] + ", " + metadata["prompts"]["physics"] + ", " + metadata["prompts"]["style"],
-        "negative_prompt": metadata["prompts"]["negative"],
-        "metadata": metadata,
+    for key in COMFYUI_URL_ENV_KEYS:
+        value = os.getenv(key, "").strip()
+        if value:
+            if not value.startswith(("http://", "https://")):
+                value = "http://" + value
+            return value.rstrip("/")
+    return None
+
+
+def _render_workflow_template(workflow_text: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Load a ComfyUI workflow JSON file with optional simple placeholders."""
+
+    replacements = {
+        "{{positive_prompt}}": payload["prompt"],
+        "{{negative_prompt}}": payload["negative_prompt"],
+        "{{seed}}": str(payload["seed"]),
+        "{{width}}": str(payload["width"]),
+        "{{height}}": str(payload["height"]),
+        "{{steps}}": str(payload["steps"]),
+        "{{cfg}}": str(payload["cfg"]),
     }
-    status = (
-        "## Low-res preview payload ready\n"
-        "The Phase 5.5 UI produced a ComfyUI-preview-shaped request. "
-        + ("Workflow file detected and ready for the future executor." if workflow_exists else "Workflow file is not installed yet, so no image was rendered in this first-pass UI stub.")
+    rendered = workflow_text
+    for placeholder, value in replacements.items():
+        rendered = rendered.replace(placeholder, str(value).replace("\n", " "))
+    workflow = json.loads(rendered)
+    if not isinstance(workflow, dict):
+        raise ValueError("Preview workflow JSON must contain a ComfyUI object graph.")
+    return workflow
+
+
+def _queue_comfyui_preview(workflow: dict[str, Any], comfyui_url: str) -> dict[str, Any]:
+    """Submit a preview workflow to ComfyUI and return the queue response."""
+
+    request_payload = json.dumps({"prompt": workflow}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{comfyui_url}/prompt",
+        data=request_payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
-    return status, json.dumps(payload, indent=2, sort_keys=True), None
+    with urllib.request.urlopen(request, timeout=COMFYUI_PREVIEW_TIMEOUT_SECONDS) as response:  # noqa: S310 - local ComfyUI URL is user-configured.
+        raw = response.read().decode("utf-8")
+    queued = json.loads(raw or "{}")
+    if not isinstance(queued, dict):
+        raise ValueError("ComfyUI returned a non-object response.")
+    return queued
+
+
+def preview_start_status() -> tuple[str, Any]:
+    """Immediately acknowledge preview clicks before the ComfyUI step runs."""
+
+    return (
+        "## ⏳ Preparing low-res preview\n"
+        "Building structured metadata, validating the preview workflow, and checking for a configured ComfyUI endpoint...",
+        gr.update(interactive=False, value="Preparing Preview..."),
+    )
+
+
+def preview_character(*args: Any) -> tuple[str, str, None, Any]:
+    """Build and optionally submit a low-res ComfyUI preview request."""
+
+    button_ready = gr.update(interactive=True, value="Live Low-Res Preview")
+    try:
+        metadata = build_character_metadata(*args)
+        seed = random.randint(1, 2_147_483_647)
+        payload = {
+            "workflow_version": PREVIEW_WORKFLOW_VERSION,
+            "workflow_path": str(DEFAULT_PREVIEW_WORKFLOW_PATH),
+            "workflow_found": DEFAULT_PREVIEW_WORKFLOW_PATH.exists(),
+            "comfyui_url": _configured_comfyui_url(),
+            "width": 512,
+            "height": 768,
+            "resolution": "512x768",
+            "steps": 12,
+            "cfg": 4.5,
+            "sampler": "low_vram_preview_default",
+            "seed": seed,
+            "seed_strategy": "generated per click for fast visual exploration",
+            "prompt": metadata["prompts"]["identity"] + ", " + metadata["prompts"]["physics"] + ", " + metadata["prompts"]["style"],
+            "negative_prompt": metadata["prompts"]["negative"],
+            "metadata": metadata,
+            "queue": {"attempted": False, "status": "not_configured", "response": None},
+        }
+
+        if not DEFAULT_PREVIEW_WORKFLOW_PATH.exists():
+            status = (
+                "## ⚠️ Preview workflow not installed\n"
+                f"Built the preview payload, but `{DEFAULT_PREVIEW_WORKFLOW_PATH}` does not exist yet. "
+                "Install or export the existing ComfyUI low-res character preview workflow to this path, then click again. "
+                "No image was rendered."
+            )
+            return status, json.dumps(payload, indent=2, sort_keys=True), None, button_ready
+
+        try:
+            workflow = _render_workflow_template(DEFAULT_PREVIEW_WORKFLOW_PATH.read_text(encoding="utf-8"), payload)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            payload["queue"] = {"attempted": False, "status": "invalid_workflow", "error": str(exc)}
+            status = (
+                "## ❌ Preview workflow could not be loaded\n"
+                f"`{DEFAULT_PREVIEW_WORKFLOW_PATH}` exists, but it could not be parsed as a valid ComfyUI workflow.\n\n"
+                f"**Error:** `{exc}`"
+            )
+            return status, json.dumps(payload, indent=2, sort_keys=True), None, button_ready
+
+        payload["workflow_node_count"] = len(workflow)
+        comfyui_url = payload["comfyui_url"]
+        if not comfyui_url:
+            status = (
+                "## ✅ Preview payload ready\n"
+                "The low-res workflow was found and the payload is ready. Set `FUTA_VISION_COMFYUI_URL` "
+                "or `COMFYUI_URL` to a running ComfyUI server to queue live previews from this button. "
+                "No network call was attempted."
+            )
+            return status, json.dumps(payload, indent=2, sort_keys=True), None, button_ready
+
+        try:
+            queued = _queue_comfyui_preview(workflow, comfyui_url)
+        except urllib.error.URLError as exc:
+            payload["queue"] = {"attempted": True, "status": "connection_error", "error": str(exc)}
+            status = (
+                "## ⚠️ Could not reach ComfyUI\n"
+                f"Tried `{comfyui_url}/prompt`, but the request failed. Confirm ComfyUI is running and reachable, "
+                "then retry. The preview payload below is still valid for debugging.\n\n"
+                f"**Error:** `{exc}`"
+            )
+            return status, json.dumps(payload, indent=2, sort_keys=True), None, button_ready
+        except (TimeoutError, json.JSONDecodeError, ValueError) as exc:
+            payload["queue"] = {"attempted": True, "status": "queue_error", "error": str(exc)}
+            status = (
+                "## ⚠️ ComfyUI preview queue returned an unexpected result\n"
+                "The workflow and endpoint were found, but the queue response could not be handled cleanly. "
+                "Check the ComfyUI console and payload below.\n\n"
+                f"**Error:** `{exc}`"
+            )
+            return status, json.dumps(payload, indent=2, sort_keys=True), None, button_ready
+
+        prompt_id = queued.get("prompt_id") or queued.get("number") or "queued"
+        payload["queue"] = {"attempted": True, "status": "queued", "response": queued}
+        status = (
+            "## ✅ Low-res preview queued\n"
+            f"ComfyUI accepted the character preview job (`{prompt_id}`). Watch the ComfyUI output folder for the rendered image. "
+            "A later Phase 5.5 pass will poll `/history` and attach the returned image directly in this panel."
+        )
+        return status, json.dumps(payload, indent=2, sort_keys=True), None, button_ready
+    except Exception as exc:  # noqa: BLE001 - Gradio boundary should always recover and re-enable the button.
+        status = (
+            "## ❌ Preview preparation failed\n"
+            "The Character Creator recovered without crashing. Review the error below, adjust the profile, and try again.\n\n"
+            f"**Error:** `{exc}`"
+        )
+        payload = {"workflow_version": PREVIEW_WORKFLOW_VERSION, "status": "error", "error": str(exc)}
+        return status, json.dumps(payload, indent=2, sort_keys=True), None, button_ready
 
 
 def randomize_basic(race: str) -> tuple[str, str, list[str], str]:
@@ -435,16 +614,37 @@ def build_character_creator_tab(initial_interactive: bool = True) -> dict[str, A
             animal_section, horns_section, wings_section, tails_section, scales_section,
             synthetic_section, eldritch_section, alien_section, large_body_section, aquatic_section,
         ]
-        race.change(race_guidance_markdown, inputs=race, outputs=guidance)
-        race.change(section_visibility, inputs=race, outputs=adaptive_sections)
+        race_outputs = [
+            guidance,
+            *adaptive_sections,
+            futa_category,
+            animal_ears,
+            tail_count,
+            horn_style,
+            wing_style,
+            scale_pattern,
+            synthetic_finish,
+            alien_palette,
+            motion_emphasis,
+        ]
+        race.change(adaptive_race_update, inputs=race, outputs=race_outputs)
         mode.change(mode_visibility, inputs=mode, outputs=[quick_group, deep_group])
         randomize_button.click(randomize_basic, inputs=race, outputs=[body_archetype, futa_category, personality_tags, style_preset])
         surprise_button.click(
             surprise_me,
             outputs=[race, body_archetype, futa_category, personality_tags, style_preset, character_name, tagline, secondary_pack, trigger_words, hair_style, tail_count, horn_style, wing_style, scale_pattern, hair_color, eldritch_intensity, guidance],
-        ).then(section_visibility, inputs=race, outputs=adaptive_sections)
+        ).then(adaptive_race_update, inputs=race, outputs=race_outputs)
         refresh_metadata_button.click(metadata_json, inputs=metadata_inputs, outputs=preview_payload)
-        preview_button.click(preview_character, inputs=metadata_inputs, outputs=[preview_status, preview_payload, preview_image], show_progress="full")
+        preview_button.click(
+            preview_start_status,
+            outputs=[preview_status, preview_button],
+            show_progress="hidden",
+        ).then(
+            preview_character,
+            inputs=metadata_inputs,
+            outputs=[preview_status, preview_payload, preview_image, preview_button],
+            show_progress="full",
+        )
 
     return {
         "tab": tab,
