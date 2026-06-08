@@ -48,6 +48,7 @@ MIN_CACHE_FREE_GB = 100.0
 
 SETTINGS_DIR = ROOT / "settings"
 INSTALLER_STATE_PATH = SETTINGS_DIR / "installer_state.json"
+INSTALLER_MANIFEST_PATH = SETTINGS_DIR / "installer_manifest.json"
 APP_SETTINGS_PATH = SETTINGS_DIR / "futa_vision_settings.json"
 ENV_PATH = ROOT / ".env"
 ENV_EXAMPLE_PATH = ROOT / ".env.example"
@@ -540,6 +541,171 @@ def merge_env_file(updates: dict[str, str], path: Path = ENV_PATH) -> None:
     LOGGER.info("Merged %s keys into environment file: %s", len(updates), path)
 
 
+
+
+def default_installer_manifest() -> dict[str, Any]:
+    """Return the Phase 5 manifest defaults shown in main.py and setup.bat."""
+
+    return {
+        "schema_version": "phase5.installer_manifest.v1",
+        "created_at": None,
+        "updated_at": None,
+        "selected_hardware_profile": "low_vram_8gb",
+        "profile_notes": "Default safe profile for Windows users with RTX 4070 8GB: generate at 1280x720, batch size 1, use VRAM safety, and offload long or high-resolution jobs to RunPod when needed.",
+        "detected_paths": {
+            "ostris": None,
+            "comfyui": None,
+            "pinokio": None,
+            "futa_vision_root": ".",
+        },
+        "comfyui": {
+            "required_nodes": {node: "unknown" for node in COMFYUI_NODE_HINTS},
+            "recommended_models": {
+                "sdxl_checkpoint": {"status": "unknown", "path": None, "notes": "Place a compatible SDXL checkpoint in ComfyUI/models/checkpoints."},
+                "wan_video_model": {"status": "unknown", "path": None, "notes": "Recommended for higher-quality video workflows; use RunPod if local VRAM is insufficient."},
+                "vae": {"status": "unknown", "path": None, "notes": "Place compatible VAE files in ComfyUI/models/vae when required by a workflow."},
+                "loras": {"status": "unknown", "path": None, "notes": "Partner and general-physics LoRAs should be linked or copied to ComfyUI/models/loras."},
+            },
+        },
+        "folders": {
+            "cache": "cache",
+            "outputs": "outputs",
+            "images": "outputs/images",
+            "clips": "outputs/clips",
+            "final_videos": "outputs/final_videos",
+            "logs": "logs",
+        },
+        "sample_tests": {
+            "last_run_at": None,
+            "status": "not_run",
+            "image_test": {"status": "not_run", "path": None},
+            "clip_test": {"status": "not_run", "path": None},
+            "warnings": [],
+        },
+        "runpod": {
+            "ready": False,
+            "api_key_present": False,
+            "default_mode": "Auto",
+            "notes": "RunPod is optional but recommended for long Wan jobs, high-resolution upscales, or repeated CUDA out-of-memory errors on 8GB GPUs.",
+        },
+        "last_successful_installer_run": None,
+        "overall_status": "not_configured",
+        "warnings": ["Installer has not completed yet. Run setup.bat or click Run Installer / Repair Installation in the Settings tab."],
+    }
+
+
+def _first_detected_path(detections: dict[str, list[InstallCandidate]], kind: str) -> str | None:
+    """Return the first detected path for a component."""
+
+    candidates = detections.get(kind) or []
+    return str(candidates[0].path) if candidates else None
+
+
+def _comfyui_node_status(comfyui_path: str | None) -> dict[str, str]:
+    """Return present/missing/unknown status for recommended ComfyUI nodes."""
+
+    if not comfyui_path:
+        return {node: "unknown" for node in COMFYUI_NODE_HINTS}
+    custom_nodes = Path(comfyui_path) / "custom_nodes"
+    if not custom_nodes.exists():
+        return {node: "missing" for node in COMFYUI_NODE_HINTS}
+    installed = {child.name.lower() for child in custom_nodes.iterdir() if child.is_dir()}
+    return {node: "installed" if node.lower() in installed else "missing" for node in COMFYUI_NODE_HINTS}
+
+
+def _model_status(comfyui_path: str | None, relative_folder: str, patterns: tuple[str, ...]) -> dict[str, str | None]:
+    """Return a lightweight recommended-model presence check for the manifest."""
+
+    if not comfyui_path:
+        return {"status": "unknown", "path": None}
+    folder = Path(comfyui_path) / relative_folder
+    if not folder.exists():
+        return {"status": "missing", "path": str(folder)}
+    has_model = any(file.is_file() and file.suffix.lower() in patterns for file in folder.iterdir())
+    return {"status": "installed" if has_model else "missing", "path": str(folder)}
+
+
+def write_installer_manifest(
+    *,
+    detections: dict[str, list[InstallCandidate]] | None = None,
+    report: HardwareReport | None = None,
+    state: InstallerState | None = None,
+    sample_image_path: str | None = None,
+    sample_clip_path: str | None = None,
+    sample_warnings: list[str] | None = None,
+    overall_status: str = "installed",
+) -> dict[str, Any]:
+    """Create/update settings/installer_manifest.json with durable installation status."""
+
+    manifest = default_installer_manifest()
+    existing = read_json(INSTALLER_MANIFEST_PATH)
+    if existing:
+        manifest.update(existing)
+    manifest["schema_version"] = "phase5.installer_manifest.v1"
+    manifest["created_at"] = manifest.get("created_at") or now_iso()
+    manifest["updated_at"] = now_iso()
+
+    env = load_env_file()
+    detected_paths = dict(manifest.get("detected_paths", {}))
+    if detections:
+        detected_paths.update({
+            "ostris": _first_detected_path(detections, "ostris") or detected_paths.get("ostris"),
+            "comfyui": _first_detected_path(detections, "comfyui") or detected_paths.get("comfyui"),
+            "pinokio": _first_detected_path(detections, "pinokio") or detected_paths.get("pinokio"),
+            "futa_vision_root": str(ROOT),
+        })
+    detected_paths["ostris"] = detected_paths.get("ostris") or env.get("OSTRIS_PATH")
+    detected_paths["comfyui"] = detected_paths.get("comfyui") or env.get("COMFYUI_PATH")
+    manifest["detected_paths"] = detected_paths
+
+    hardware_profile = (state.hardware_profile if state else None) or (report.recommended_profile.value if report else None) or env.get("FUTA_VISION_HARDWARE_PROFILE") or manifest.get("selected_hardware_profile") or "low_vram_8gb"
+    if hardware_profile == HardwareProfile.LOCAL_LOW_VRAM.value:
+        hardware_profile = "low_vram_8gb"
+    manifest["selected_hardware_profile"] = hardware_profile
+
+    comfyui_path = detected_paths.get("comfyui")
+    comfyui = dict(manifest.get("comfyui", {}))
+    comfyui["required_nodes"] = _comfyui_node_status(comfyui_path)
+    recommended = dict(default_installer_manifest()["comfyui"]["recommended_models"])
+    checks = {
+        "sdxl_checkpoint": _model_status(comfyui_path, "models/checkpoints", (".safetensors", ".ckpt", ".pt", ".pth")),
+        "wan_video_model": _model_status(comfyui_path, "models/diffusion_models", (".safetensors", ".gguf", ".pt", ".pth")),
+        "vae": _model_status(comfyui_path, "models/vae", (".safetensors", ".pt", ".pth")),
+        "loras": _model_status(comfyui_path, "models/loras", (".safetensors", ".pt", ".pth")),
+    }
+    for key, value in checks.items():
+        recommended[key].update(value)
+    comfyui["recommended_models"] = recommended
+    manifest["comfyui"] = comfyui
+
+    if sample_image_path or sample_clip_path:
+        manifest["sample_tests"] = {
+            "last_run_at": now_iso(),
+            "status": "warning" if sample_warnings else "passed",
+            "image_test": {"status": "passed" if sample_image_path else "not_run", "path": sample_image_path},
+            "clip_test": {"status": "passed" if sample_clip_path and str(sample_clip_path).endswith(".mp4") else "warning" if sample_clip_path else "not_run", "path": sample_clip_path},
+            "warnings": sample_warnings or [],
+        }
+
+    runpod_key_present = bool(env.get("RUNPOD_API_KEY") or (state and state.runpod_configured))
+    manifest["runpod"] = {
+        "ready": runpod_key_present,
+        "api_key_present": runpod_key_present,
+        "default_mode": "Auto",
+        "notes": default_installer_manifest()["runpod"]["notes"],
+    }
+    manifest["last_successful_installer_run"] = now_iso() if overall_status in {"installed", "repaired", "samples_passed"} else manifest.get("last_successful_installer_run")
+    manifest["overall_status"] = overall_status
+    warnings = list(report.warnings if report else []) + list(sample_warnings or [])
+    if not detected_paths.get("comfyui"):
+        warnings.append("ComfyUI was not detected. Set COMFYUI_PATH or install ComfyUI, then rerun repair.")
+    if not detected_paths.get("ostris"):
+        warnings.append("Ostris AI Toolkit was not detected. Set OSTRIS_PATH before LoRA training.")
+    manifest["warnings"] = warnings
+    write_json(INSTALLER_MANIFEST_PATH, json_safe(manifest))
+    return manifest
+
+
 def get_install_status() -> dict[str, Any]:
     """Return a JSON-safe status snapshot for future main.py startup integration."""
 
@@ -550,12 +716,14 @@ def get_install_status() -> dict[str, Any]:
     status = {
         "schema_version": INSTALLER_SCHEMA_VERSION,
         "root": ROOT,
-        "is_first_run": not INSTALLER_STATE_PATH.exists() or not bool(state.get("installed_at")),
+        "is_first_run": not INSTALLER_MANIFEST_PATH.exists() or not INSTALLER_STATE_PATH.exists() or not bool(state.get("installed_at")),
         "state_path": INSTALLER_STATE_PATH,
+        "manifest_path": INSTALLER_MANIFEST_PATH,
         "settings_path": APP_SETTINGS_PATH,
         "env_path": ENV_PATH,
         "log_path": LOG_PATH,
         "state_exists": INSTALLER_STATE_PATH.exists(),
+        "manifest_exists": INSTALLER_MANIFEST_PATH.exists(),
         "settings_exists": APP_SETTINGS_PATH.exists(),
         "env_exists": ENV_PATH.exists(),
         "adult_confirmed": bool(state.get("adult_confirmed", False)),
@@ -583,6 +751,7 @@ def needs_repair(status: dict[str, Any] | None = None) -> bool:
     current = status or get_install_status()
     return bool(
         current.get("is_first_run")
+        or not current.get("manifest_exists")
         or not current.get("settings_exists")
         or not current.get("env_exists")
         or not current.get("adult_confirmed")
@@ -1496,6 +1665,7 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
         warnings=all_warnings,
     )
     write_json(INSTALLER_STATE_PATH, json_safe(state))
+    write_installer_manifest(detections=detections, report=report, state=state, sample_image_path=image_path, sample_clip_path=clip_path, sample_warnings=sample_warnings, overall_status="installed")
     CONSOLE.print(Panel(
         "[bold green]Installation successful! You can now launch Futa-Vision.[/bold green]\n"
         "Next steps:\n"
@@ -1527,6 +1697,16 @@ def command_test_samples(args: argparse.Namespace) -> int:
 
     ensure_project_directories()
     image, clip, warnings = run_sample_tests()
+    detections = scan_for_installs()
+    report = build_hardware_report()
+    write_installer_manifest(
+        detections=detections,
+        report=report,
+        sample_image_path=str(image),
+        sample_clip_path=str(clip),
+        sample_warnings=warnings,
+        overall_status="samples_passed" if not warnings else "samples_warning",
+    )
     CONSOLE.print(Panel(f"Sample image: {image}\nSample clip: {clip}", title="Sample tests", border_style="green"))
     for warning in warnings:
         CONSOLE.print(f"[yellow]Warning:[/yellow] {warning}")
@@ -1616,6 +1796,7 @@ def command_repair(args: argparse.Namespace) -> int:
     render_detection_table(detections)
     render_hardware_report(report)
     render_repair_suggestions(detections, report)
+    write_installer_manifest(detections=detections, report=report, overall_status="repaired")
     CONSOLE.print(Panel(
         "Repair Mode complete. If a warning remains, follow the listed recovery action and rerun `python installer.py repair`.",
         title="Repair complete",
@@ -1648,6 +1829,7 @@ def command_install(args: argparse.Namespace) -> int:
             "Next step: run `python main.py` or use --launch to start automatically.",
             f"Installer state: {INSTALLER_STATE_PATH}",
             f"App settings: {APP_SETTINGS_PATH}",
+            f"Installer manifest: {INSTALLER_MANIFEST_PATH}",
             f"Environment file: {ENV_PATH}",
             f"Installer log: {LOG_PATH}",
             f"Hardware profile: {state.hardware_profile}",

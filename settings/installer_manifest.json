@@ -1,0 +1,75 @@
+{
+  "schema_version": "phase5.installer_manifest.v1",
+  "created_at": null,
+  "updated_at": null,
+  "selected_hardware_profile": "low_vram_8gb",
+  "profile_notes": "Default safe profile for Windows users with RTX 4070 8GB: generate at 1280x720, batch size 1, use VRAM safety, and offload long or high-resolution jobs to RunPod when needed.",
+  "detected_paths": {
+    "ostris": null,
+    "comfyui": null,
+    "pinokio": null,
+    "futa_vision_root": "."
+  },
+  "comfyui": {
+    "required_nodes": {
+      "ComfyUI-Manager": "unknown",
+      "ComfyUI-VideoHelperSuite": "unknown",
+      "ComfyUI-LTXVideo": "unknown",
+      "ComfyUI-WanVideoWrapper": "unknown"
+    },
+    "recommended_models": {
+      "sdxl_checkpoint": {
+        "status": "unknown",
+        "path": null,
+        "notes": "Place a compatible SDXL checkpoint in ComfyUI/models/checkpoints."
+      },
+      "wan_video_model": {
+        "status": "unknown",
+        "path": null,
+        "notes": "Recommended for higher-quality video workflows; use RunPod if local VRAM is insufficient."
+      },
+      "vae": {
+        "status": "unknown",
+        "path": null,
+        "notes": "Place compatible VAE files in ComfyUI/models/vae when required by a workflow."
+      },
+      "loras": {
+        "status": "unknown",
+        "path": null,
+        "notes": "Partner and general-physics LoRAs should be linked or copied to ComfyUI/models/loras."
+      }
+    }
+  },
+  "folders": {
+    "cache": "cache",
+    "outputs": "outputs",
+    "images": "outputs/images",
+    "clips": "outputs/clips",
+    "final_videos": "outputs/final_videos",
+    "logs": "logs"
+  },
+  "sample_tests": {
+    "last_run_at": null,
+    "status": "not_run",
+    "image_test": {
+      "status": "not_run",
+      "path": null
+    },
+    "clip_test": {
+      "status": "not_run",
+      "path": null
+    },
+    "warnings": []
+  },
+  "runpod": {
+    "ready": false,
+    "api_key_present": false,
+    "default_mode": "Auto",
+    "notes": "RunPod is optional but recommended for long Wan jobs, high-resolution upscales, or repeated CUDA out-of-memory errors on 8GB GPUs."
+  },
+  "last_successful_installer_run": null,
+  "overall_status": "not_configured",
+  "warnings": [
+    "Installer has not completed yet. Run setup.bat or click Run Installer / Repair Installation in the Settings tab."
+  ]
+}
