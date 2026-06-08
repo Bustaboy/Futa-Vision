@@ -1,70 +1,213 @@
 # Futa-Vision
 
-Futa-Vision is the working repository for **FutaSlime Director**, a local-first NSFW long-form AI video director app.
+Futa-Vision is the working repository for **FutaSlime Director**, a local-first NSFW long-form AI video director app built around a Gradio desktop workflow.
 
-The canonical project source document is available at:
+The canonical project source documents are:
 
 - [FutaSlime Director — Comprehensive Development Plan & Roadmap](docs/source_document.md)
 - [Futa-Vision — Product Roadmap](docs/product_roadmap.md)
 
-## Phase 0 skeleton
+## Installation (Phase 5 recommended path)
 
-The current Phase 0 implementation is a runnable Gradio-first skeleton that mirrors the project roadmap in `docs/source_document.md` and the implementation guidance in `CURSOR_VIBE_CODING_GUIDE.md`. It uses the Phase 0 hardware policy from the source document: RTX 4070-class 8 GB systems should run `local_low_vram` with 720p generation, then final upscale using SeedVR 2.5 / RTX Video SR / Nomos2 after the timeline is approved.
+> **Adult-use notice:** this application is intended only for adult operators creating lawful, consensual adult content. Futa-Vision runs locally by default. Private prompts, references, LoRAs, outputs, and metadata are not uploaded unless you explicitly configure and approve a cloud job.
 
-### How to test Phase 0
+### Option A — Windows `setup.bat` (recommended)
 
-1. Create and activate a Python 3.12+ virtual environment.
-2. Install runtime dependencies:
+Use this path on a fresh Windows machine, including RTX 4070 8GB systems.
 
-   ```bash
-   python -m pip install -r requirements.txt
-   ```
+1. Install **Python 3.12 or newer** from <https://www.python.org/downloads/windows/>.
+   - During install, enable **Add python.exe to PATH**.
+2. Download or clone this repository.
+3. Double-click `setup.bat` from the repository folder.
+4. Keep the console window open while it:
+   - detects Python,
+   - installs/refreshes packages from `requirements.txt`,
+   - runs the Phase 5 installer and repair checks,
+   - creates project folders,
+   - writes/refreshes `settings/installer_manifest.json`,
+   - creates a sample image and short sample clip to verify output permissions/codecs.
+5. When setup finishes, choose whether to launch Futa-Vision immediately.
+6. In the Gradio app, open **⚙️ Settings** and confirm the **Phase 5 Installer Status** badge is green.
 
-3. Copy the environment template and fill any local engine paths or RunPod credentials you want to test:
+Launch later with:
 
-   ```bash
-   cp .env.example .env
-   ```
+```bat
+python main.py
+```
 
-4. Detect local Pinokio/portable/manual Ostris and ComfyUI installs and create the project storage layout:
+Quick verification command after installation:
 
-   ```bash
-   python setup.py detect
-   ```
+```bat
+python installer.py test-samples
+```
 
-5. Run the hardware report. On an RTX 4070-class 8 GB CUDA GPU, the recommendation should be `local_low_vram`; on machines without CUDA, cloud offload is recommended:
+### Option B — Pinokio recipe
 
-   ```bash
-   python hardware_check.py
-   ```
+Use this path if you manage AI apps with Pinokio.
 
-6. Run the Phase 0 smoke tests:
+1. Install Pinokio and open it.
+2. Import or open the Futa-Vision recipe for this repository.
+3. Run the recipe install/setup action.
+4. Let the recipe install Python requirements and run the Phase 5 installer.
+5. Start the app from Pinokio.
+6. Open **⚙️ Settings** and verify:
+   - **Installation ready** appears in green,
+   - detected Pinokio/ComfyUI/Ostris paths are correct,
+   - sample tests show `passed` or a clear warning with next steps.
 
-   ```bash
-   python -m pytest -q
-   ```
+If Pinokio installs ComfyUI or Ostris outside this repository, set `COMFYUI_PATH` and/or `OSTRIS_PATH` in `.env`, then click **🛠️ Run Installer / Repair Installation (safe)** in Settings.
 
-7. Launch the Gradio UI and open the Setup tab. Confirm the NSFW/adult banner, verify that the live Hardware Status report appears, and then inspect the Library, Create Partner, Generate Video, and Timeline placeholder tabs. If `FUTA_VISION_REQUIRE_ADULT_CONFIRMATION=true`, generation/edit controls remain gated until the checkbox is confirmed:
+### Option C — Manual Python installer
 
-   ```bash
-   python main.py
-   ```
+Use this path on macOS/Linux, advanced Windows installs, or development environments.
 
-### Developer test dependencies
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python installer.py --non-interactive --accept-adult --privacy-ack
+python installer.py test-samples
+python main.py
+```
 
-`pytest` is exposed through the `dev` extra in `setup.py` and pinned in `requirements.txt` for the Phase 0 smoke-test path.
+For an interactive wizard instead, run:
 
-## Phase 0.5 Completed
+```bash
+python installer.py
+```
 
-Phase 0.5 adds the General Physics/Anatomy Base LoRA training path: a neutral bundled dataset builder, strict physics-only caption sanitization, low-VRAM Ostris training defaults, Gradio training controls, versioned `.safetensors`/metadata outputs, and a safe placeholder config path when Ostris is not installed.
+For detection only:
 
-One-line test command:
+```bash
+python installer.py detect --repair
+```
+
+For safe repair actions:
+
+```bash
+python installer.py repair --all
+```
+
+## First launch checklist
+
+1. Open the local Gradio URL printed by `python main.py` or `setup.bat`.
+2. Confirm the adult-use gate if enabled.
+3. Open **⚙️ Settings**.
+4. Check the color-coded installer badge:
+   - **Green:** installation is ready.
+   - **Yellow:** first-run setup or optional repair is recommended.
+   - **Red:** the installer manifest is unreadable/corrupted or repair is needed before generation.
+5. Click **🛠️ Run Installer / Repair Installation (safe)** if the badge is yellow or red.
+6. Run `python installer.py test-samples` if you want a quick command-line verification that image/clip outputs can be written.
+7. Start with the **RTX 4070 8GB Safe** performance preset for local jobs.
+
+## RTX 4070 8GB troubleshooting tips
+
+RTX 4070 8GB machines are supported as a low-VRAM local profile, but should use conservative defaults.
+
+- Use **720p generation**, **batch size 1**, and the **RTX 4070 8GB Safe** preset.
+- Keep **VRAM safety** enabled in Settings.
+- Prefer local preview jobs first; use RunPod/cloud offload for long clips, Wan-heavy workflows, high-resolution finals, or repeated out-of-memory failures.
+- If a job fails with CUDA out-of-memory:
+  1. close other GPU-heavy apps,
+  2. restart the app,
+  3. retry at the safe preset,
+  4. if it still fails, use **Auto** or **Cloud** mode.
+- Update NVIDIA drivers if PyTorch/CUDA packages fail to install or `nvidia-smi` does not work.
+- Keep plenty of free disk space. Video caches, previews, and timelines can grow quickly; 100GB+ free space is strongly recommended.
+- If sample MP4 creation writes a placeholder text file instead of an `.mp4`, reinstall requirements and run:
+
+  ```bash
+  python -m pip install -r requirements.txt
+  python installer.py test-samples
+  ```
+
+## Common troubleshooting
+
+### The Settings badge is yellow on first launch
+
+This is normal if the installer has not completed yet. Click **🛠️ Run Installer / Repair Installation (safe)** in Settings or run:
+
+```bash
+python installer.py --non-interactive --accept-adult --privacy-ack
+```
+
+### The Settings badge is red
+
+The app is using fallback defaults because `settings/installer_manifest.json` is missing, unreadable, or corrupted. Run repair:
+
+```bash
+python installer.py repair --all
+python installer.py test-samples
+```
+
+You can also rename `settings/installer_manifest.json` and rerun `setup.bat`; repair does not delete your outputs.
+
+### ComfyUI or Ostris is not detected
+
+Set the paths in `.env` and rerun repair:
+
+```env
+COMFYUI_PATH=C:\path\to\ComfyUI
+OSTRIS_PATH=C:\path\to\ostris\ai-toolkit
+```
+
+Then run:
+
+```bash
+python installer.py detect --repair
+python installer.py repair --fix-model-paths
+```
+
+### Gradio does not open in the browser
+
+Run the app manually and copy the printed local URL into your browser:
+
+```bash
+python main.py
+```
+
+If Windows Firewall asks for access, allow Python for local/private networks.
+
+### Dependency install fails
+
+Try:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Then review `logs/installer.log` for the exact failure. On Windows, update NVIDIA drivers before retrying CUDA-related packages.
+
+## Developer setup and tests
+
+Recommended development smoke test:
 
 ```bash
 python -m pytest -q
 ```
 
-Next implementation target: Phase 1 will turn the placeholder library into persistent LoRA/library indexing, register the approved General Physics LoRA, and use it automatically before partner generation and partner LoRA training.
+Installer verification:
+
+```bash
+python installer.py test-samples
+```
+
+Launch the UI:
+
+```bash
+python main.py
+```
+
+`pytest` is exposed through the `dev` extra in `setup.py` and pinned in `requirements.txt` for the smoke-test path.
+
+## Phase 0 skeleton
+
+The Phase 0 implementation is a runnable Gradio-first skeleton that mirrors the project roadmap in `docs/source_document.md` and the implementation guidance in `CURSOR_VIBE_CODING_GUIDE.md`. It uses the Phase 0 hardware policy from the source document: RTX 4070-class 8GB systems should run `local_low_vram` with 720p generation, then final upscale using SeedVR 2.5 / RTX Video SR / Nomos2 after the timeline is approved.
+
+## Phase 0.5 Completed
+
+Phase 0.5 adds the General Physics/Anatomy Base LoRA training path: a neutral bundled dataset builder, strict physics-only caption sanitization, low-VRAM Ostris training defaults, Gradio training controls, versioned `.safetensors`/metadata outputs, and a safe placeholder config path when Ostris is not installed.
 
 ## Phase 2 Complete
 
@@ -73,33 +216,16 @@ Phase 2 adds the video-generation pipeline shell around the Phase 1 Character Li
 Basic usage:
 
 1. Register or verify Character Library entries for the locked fixed male and any partner LoRAs.
-2. Launch the app:
-
-   ```bash
-   python main.py
-   ```
-
+2. Launch the app with `python main.py`.
 3. Open **Generate Video**, paste Character Library IDs, and click **Preview selected characters** to confirm the thumbnails that will be loaded into the scene.
 4. Choose **LTX for speed** or **Wan for physics**, keep the default 720p local generation strategy, and set the smart-loop target duration.
-5. Click **Build generation plan** to inspect hardware-aware settings, or **Generate Video** to run the placeholder Phase 2 chain:
-   - short clip generation manifest with General Physics Base LoRA + character LoRAs,
-   - Florence-2-style auto-review with explicit skin stretch, slime viscosity, depressed-contact, pressure-deformation, anatomy, and consistency checks,
-   - smart-loop extension with 15-frame overlap and disk-space safety checks for long extensions,
-   - final upscale sidecar using SeedVR 2.5 / RTX Video SR / Nomos2 temporal-consistency metadata.
+5. Click **Build generation plan** to inspect hardware-aware settings, or **Generate Video** to run the placeholder Phase 2 chain.
 
 Phase 2 test command:
 
 ```bash
 python -m pytest -q tests/test_video_assembly_phase2.py
 ```
-
-Full regression command:
-
-```bash
-python -m pytest -q
-```
-
-Phase 3 has now superseded this target with Timeline + Chat Editing and targeted regeneration.
 
 ## Phase 3 Complete
 
@@ -117,47 +243,20 @@ Phase 3 test commands:
 python -m pytest -q tests/test_timeline_phase31.py tests/test_chat_parser_phase32.py tests/test_regeneration_phase33.py
 ```
 
-Full regression command:
-
-```bash
-python -m pytest -q
-```
-
 ## Phase 4.1 Complete
 
 Phase 4.1 adds local-first RunPod cloud offloading and hybrid mode while preserving the Phase 2/3 JSON sidecar contract. The UI, scoring, and timeline remain local; Cloud/Auto only packages the reviewed workflow manifest and listed assets for remote execution when RunPod credentials and an upload worker are configured.
 
-Basic usage:
+## Phase 4.2 Complete
 
-1. Add optional RunPod settings to `.env`:
-   - `RUNPOD_API_KEY` for pod launch/status/disconnect.
-   - `RUNPOD_POD_ID` or `RUNPOD_TEMPLATE_ID` if you already have a preferred pod/template.
-   - `FUTA_VISION_RUNPOD_UPLOAD_URL` only when a remote worker is ready to consume `workflow_manifest.json`.
-2. Launch the app:
+Phase 4.2 adds final export/upscale UX, cost-aware cloud controls, settings persistence, adult-gate finalization, and local-first privacy polish.
 
-   ```bash
-   python main.py
-   ```
+## Phase 5 Complete
 
-3. Open **Setup → Phase 4.1 Cloud / Hybrid Mode**. Use the color-coded badge to verify whether the selector is in **Local**, **Cloud ready**, or **local fallback** state.
-4. Use **One-click Launch RunPod Pod**, then **Refresh Cloud Status**. If RunPod is still booting or networking is delayed, wait 30–60 seconds and retry refresh before falling back locally.
-5. In **Generate Video**, choose **Local / Cloud / Auto**:
-   - **Local:** no cloud upload is attempted.
-   - **Cloud:** uses RunPod when available, otherwise falls back locally.
-   - **Auto:** keeps RTX 4070 8 GB-friendly 720p local defaults, but offloads unavailable-CUDA, OOM-like, Wan/long-duration, or heavy jobs when cloud is available.
-6. If a remote upload worker URL is configured, review the manifest/privacy notice and enable the upload confirmation checkbox before generation.
-7. Returned cloud outputs are downloaded/copied into `outputs/cloud_results`, given/validated JSON sidecars, and imported back into the local timeline.
+Phase 5 adds the beginner-friendly installer flow:
 
-Phase 4.1 test command:
-
-```bash
-python -m pytest -q tests/test_cloud_manager_phase41.py
-```
-
-Full regression command:
-
-```bash
-python -m pytest -q
-```
-
-Phase 4.2 will polish final export/upscale UX, add cost estimates and remote cache controls, and replace exact timeline slots with returned cloud outputs.
+- `setup.bat` for guided Windows setup,
+- `installer.py` for detection, installation, repair, and sample tests,
+- `settings/installer_manifest.json` integration,
+- Settings-tab color-coded installer status,
+- first-run guidance and safe repair from the Gradio UI.

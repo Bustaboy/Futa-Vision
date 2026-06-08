@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -41,6 +42,23 @@ INSTALLER_MANIFEST_PATH = Path("settings/installer_manifest.json")
 INSTALLER_STATE_PATH = Path("settings/installer_state.json")
 INSTALLER_LOG_PATH = Path("logs/installer.log")
 ADULT_CONFIRMATION_ENV = "FUTA_VISION_REQUIRE_ADULT_CONFIRMATION"
+APP_LOG_PATH = Path("logs/app.log")
+LOGGER = logging.getLogger("futa_vision_app")
+
+
+def configure_app_logging() -> None:
+    """Configure lightweight app logging for first-run and installer diagnostics."""
+
+    if LOGGER.handlers:
+        return
+    APP_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LOGGER.setLevel(logging.INFO)
+    handler = logging.FileHandler(APP_LOG_PATH, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    LOGGER.addHandler(handler)
+
+
+configure_app_logging()
 
 
 @dataclass(slots=True)
@@ -735,46 +753,62 @@ def default_installer_manifest() -> dict[str, Any]:
     }
 
 
+def _deep_merge(defaults: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Merge installer JSON onto defaults while preserving nested fallback keys."""
+
+    merged: dict[str, Any] = dict(defaults)
+    for key, value in payload.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def load_installer_manifest(path: Path | None = None) -> dict[str, Any]:
     """Load the Phase 5 installer manifest without crashing first launch."""
 
     target = path or INSTALLER_MANIFEST_PATH
     defaults = default_installer_manifest()
     if not target.exists():
-        return defaults | {"manifest_exists": False}
+        LOGGER.info("Installer manifest is missing; using first-run defaults: %s", target)
+        return defaults | {"manifest_exists": False, "manifest_health": "missing"}
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
+        LOGGER.warning("Installer manifest JSON is corrupt: %s", exc)
         return defaults | {
             "manifest_exists": True,
+            "manifest_health": "corrupted",
             "manifest_error": f"corrupt JSON at line {exc.lineno}, column {exc.colno}",
             "overall_status": "needs_repair",
             "warnings": [
-                f"Installer manifest is corrupted: {exc}. Click Run Installer / Repair Installation to rebuild it, or rename settings/installer_manifest.json and run setup.bat.",
+                "Installer manifest is corrupted. Click Run Installer / Repair Installation to rebuild it, or rename settings/installer_manifest.json and run setup.bat.",
             ],
         }
     except OSError as exc:
+        LOGGER.warning("Installer manifest could not be read: %s", exc)
         return defaults | {
             "manifest_exists": True,
+            "manifest_health": "unreadable",
             "manifest_error": str(exc),
             "overall_status": "needs_repair",
             "warnings": [f"Installer manifest could not be read: {exc}. Check file permissions and run repair."],
         }
     if not isinstance(payload, dict):
+        LOGGER.warning("Installer manifest is not a JSON object: %s", target)
         return defaults | {
             "manifest_exists": True,
+            "manifest_health": "invalid",
             "manifest_error": "not_json_object",
             "overall_status": "needs_repair",
             "warnings": ["Installer manifest is not a JSON object. Click Run Installer / Repair Installation to rebuild it."],
         }
 
-    merged = defaults
-    for key, value in payload.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key].update(value)
-        else:
-            merged[key] = value
+    merged = _deep_merge(defaults, payload)
     merged["manifest_exists"] = True
+    merged["manifest_health"] = "ok"
+    merged.setdefault("warnings", [])
     return merged
 
 
@@ -782,13 +816,36 @@ def installation_needs_attention(manifest: dict[str, Any] | None = None) -> bool
     """Return True when first-run setup or repair should be highlighted in the UI."""
 
     current = manifest or load_installer_manifest()
-    if not current.get("manifest_exists"):
+    if current.get("manifest_health") != "ok":
         return True
     if not INSTALLER_STATE_PATH.exists() and current.get("overall_status") not in {"installed", "repaired", "samples_passed"}:
         return True
-    if current.get("overall_status") in {"not_configured", "failed", "needs_repair"}:
+    if current.get("overall_status") in {"not_configured", "failed", "needs_repair", "samples_warning"}:
         return True
     return any("not detected" in str(warning).lower() or "missing" in str(warning).lower() for warning in current.get("warnings", []))
+
+
+def installer_status_tone(manifest: dict[str, Any]) -> str:
+    """Return green/yellow/red tone for the installer badge."""
+
+    if manifest.get("manifest_health") in {"corrupted", "invalid", "unreadable"} or manifest.get("overall_status") == "failed":
+        return "error"
+    if installation_needs_attention(manifest):
+        return "warning"
+    return "success"
+
+
+def installer_status_label(manifest: dict[str, Any]) -> str:
+    """Return concise beginner-friendly installer status label."""
+
+    tone = installer_status_tone(manifest)
+    if tone == "success":
+        return "Installation ready"
+    if tone == "error":
+        return "Repair needed"
+    if not manifest.get("manifest_exists"):
+        return "First-run setup needed"
+    return "Setup attention needed"
 
 
 def _markdown_list(items: dict[str, Any]) -> str:
@@ -800,13 +857,34 @@ def _markdown_list(items: dict[str, Any]) -> str:
 
 
 def installer_status_badge(manifest: dict[str, Any]) -> str:
-    """Return a small colored HTML status badge for the Settings tab."""
+    """Return a colored HTML status badge for the Settings tab."""
 
-    if manifest.get("manifest_error"):
-        return status_badge("Manifest needs repair", "warning")
-    if installation_needs_attention(manifest):
-        return status_badge("Setup attention needed", "warning")
-    return status_badge("Installer ready", "success")
+    return status_badge(installer_status_label(manifest), installer_status_tone(manifest))
+
+
+def installer_action_card(manifest: dict[str, Any] | None = None) -> str:
+    """Render a prominent first-run/repair callout for non-technical users."""
+
+    current = manifest or load_installer_manifest()
+    tone = installer_status_tone(current)
+    border = {"success": "#16a34a", "warning": "#f59e0b", "error": "#dc2626"}[tone]
+    background = {"success": "#f0fdf4", "warning": "#fffbeb", "error": "#fef2f2"}[tone]
+    if tone == "success":
+        title = "Installation looks ready"
+        body = "You can still run repair any time to refresh paths, sample tests, and the installer manifest."
+    elif tone == "error":
+        title = "Repair is recommended before generating"
+        body = "The installer manifest is missing, unreadable, or corrupted. Repair rebuilds setup files without deleting your outputs."
+    else:
+        title = "Finish first-run setup"
+        body = "Run the guided installer/repair once so Futa-Vision can verify folders, RTX 4070 8GB-safe defaults, sample writes, and engine paths."
+    return (
+        f"<div style='border:2px solid {border};background:{background};padding:1rem;border-radius:14px;margin:0.5rem 0;'>"
+        f"<div style='font-size:1.1rem;font-weight:800;margin-bottom:0.35rem;'>{installer_status_badge(current)} &nbsp; {title}</div>"
+        f"<div>{body}</div>"
+        "<div style='margin-top:0.5rem;font-weight:700;'>Click the large 🛠️ button below. Safe to run repeatedly.</div>"
+        "</div>"
+    )
 
 
 def _workflow_markdown(workflows: list[dict[str, Any]]) -> str:
@@ -833,7 +911,7 @@ def installer_status_markdown() -> str:
     last_sample = manifest.get("last_sample_test_result", {})
     runpod = manifest.get("runpod", {})
     last_run = manifest.get("last_run_summary", {})
-    attention = "⚠️ First-run or repair is recommended." if installation_needs_attention(manifest) else "✅ Installer state looks ready."
+    attention = "⚠️ First-run setup or repair is recommended." if installation_needs_attention(manifest) else "✅ Installer state looks ready."
     manifest_note = ""
     if not manifest.get("manifest_exists"):
         manifest_note = "\n\n> Manifest file is missing. The app is using safe defaults until setup or repair writes a fresh file."
@@ -846,6 +924,7 @@ def installer_status_markdown() -> str:
 {attention}{manifest_note}
 
 - Overall status: `{manifest.get('overall_status', 'unknown')}`
+- Manifest health: `{manifest.get('manifest_health', 'unknown')}`
 - Last successful installer run: `{manifest.get('last_successful_installer_run') or 'never'}`
 - Last run summary: `{last_run.get('message', 'No installer run recorded.')}`
 - Hardware profile: `{manifest.get('selected_hardware_profile', 'low_vram_8gb')}`
@@ -853,6 +932,14 @@ def installer_status_markdown() -> str:
 - Last sample result: `{last_sample.get('summary', 'Sample media tests have not run yet.')}`
 - RunPod ready: `{runpod.get('ready', False)}` (API key present: `{runpod.get('api_key_present', False)}`)
 - Installer log: `{INSTALLER_LOG_PATH}`
+- App log: `{APP_LOG_PATH}`
+
+### Quick Verification Command
+After setup completes, run:
+
+```bash
+python installer.py test-samples
+```
 
 ### Detected Paths
 {path_text}
@@ -871,16 +958,23 @@ def installer_status_markdown() -> str:
 def installation_attention_banner() -> str:
     """Show a prominent top-of-app first-run/repair message."""
 
-    if not installation_needs_attention():
+    manifest = load_installer_manifest()
+    if not installation_needs_attention(manifest):
         return "✅ Phase 5 installer status is ready. Open Settings any time for diagnostics or repair tools."
+    if manifest.get("manifest_health") in {"corrupted", "invalid", "unreadable"}:
+        return (
+            "## ❌ Installer manifest needs repair\n"
+            "Futa-Vision is running with safe fallback defaults because `settings/installer_manifest.json` could not be read cleanly. "
+            "Open the ⚙️ Settings tab and click **🛠️ Run Installer / Repair Installation (safe)**."
+        )
     return (
-        "## ⚠️ Setup or repair recommended\n"
-        "Futa-Vision can open, but generation/training paths may be incomplete or the manifest may need repair. "
-        "Open the ⚙️ Settings tab and click **🛠️ Run Installer / Repair Installation (safe)** before creating outputs."
+        "## ⚠️ First-run setup recommended\n"
+        "Futa-Vision can open, but generation/training paths may be incomplete until the installer verifies folders, sample output writes, "
+        "and RTX 4070 8GB-safe defaults. Open the ⚙️ Settings tab and click **🛠️ Run Installer / Repair Installation (safe)**."
     )
 
 
-def run_installer_repair_from_ui() -> tuple[str, str]:
+def run_installer_repair_from_ui() -> tuple[str, str, str]:
     """Run installer.py safely from Gradio and return refreshed status plus console output."""
 
     command = [
@@ -890,19 +984,25 @@ def run_installer_repair_from_ui() -> tuple[str, str]:
         "--accept-adult",
         "--privacy-ack",
     ]
+    LOGGER.info("Starting installer repair from UI: %s", command)
     try:
         completed = subprocess.run(command, cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=1800, check=False)
     except subprocess.TimeoutExpired:
-        return settings_markdown(), "Installer timed out after 30 minutes. Check logs/installer.log and run setup.bat if dependencies are still installing."
+        LOGGER.warning("Installer repair timed out from UI")
+        message = "Installer timed out after 30 minutes. Check logs/installer.log and run setup.bat if dependencies are still installing."
+        return settings_markdown(), installer_action_card(), message
     except OSError as exc:
-        return settings_markdown(), f"Could not start installer: {exc}"
+        LOGGER.exception("Could not start installer repair from UI")
+        return settings_markdown(), installer_action_card(), f"Could not start installer: {exc}"
 
     output = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
     if not output:
         output = "Installer finished without console output."
+    LOGGER.info("Installer repair completed from UI with exit code %s", completed.returncode)
+    verification_hint = "\n\nVerification: run `python installer.py test-samples`, then refresh Settings."
     if completed.returncode == 0:
-        return settings_markdown(), "✅ Installer / repair completed successfully. Settings were refreshed.\n\n" + output[-12000:]
-    return settings_markdown(), f"❌ Installer exited with code {completed.returncode}. Review logs/installer.log, then rerun repair or setup.bat.\n\n{output[-12000:]}"
+        return settings_markdown(), installer_action_card(), "✅ Installer / repair completed successfully. Settings were refreshed." + verification_hint + "\n\n" + output[-12000:]
+    return settings_markdown(), installer_action_card(), f"❌ Installer exited with code {completed.returncode}. Review logs/installer.log, then rerun repair or setup.bat.{verification_hint}\n\n{output[-12000:]}"
 
 
 def settings_markdown() -> str:
@@ -910,7 +1010,7 @@ def settings_markdown() -> str:
 
     settings = load_app_settings()
     return (
-        "## Current Phase 4.2 Settings\n"
+        "## Current Phase 4.2 Settings / Phase 5 Installer\n"
         f"{app_polish_status()}\n\n"
         f"- Cloud default mode: `{settings['cloud']['default_mode']}`\n"
         f"- RunPod key present: `{settings['cloud']['runpod_api_key_present']}`\n"
@@ -1035,6 +1135,7 @@ def build_ui() -> gr.Blocks:
                     "Settings are stored locally in `settings/futa_vision_settings.json`; cloud uploads still require per-job approval."
                 )
                 settings_status = gr.Markdown(settings_markdown())
+                installer_action = gr.HTML(installer_action_card())
                 settings_defaults = load_app_settings()
                 with gr.Accordion("Cloud preferences", open=True):
                     settings_runpod_key = gr.Textbox(
@@ -1091,7 +1192,7 @@ def build_ui() -> gr.Blocks:
                     show_progress="full",
                 )
                 refresh_settings_button.click(settings_markdown, outputs=settings_status)
-                run_installer_button.click(run_installer_repair_from_ui, outputs=[settings_status, installer_run_output], show_progress="full")
+                run_installer_button.click(run_installer_repair_from_ui, outputs=[settings_status, installer_action, installer_run_output], show_progress="full")
 
             with gr.Tab("Train General Physics LoRA", id="Train General Physics LoRA", visible=initial_interactive) as training_tab:
                 gr.Markdown(
