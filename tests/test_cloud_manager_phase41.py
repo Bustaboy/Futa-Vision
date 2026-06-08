@@ -187,6 +187,8 @@ def test_runpod_client_lifecycle_uses_rest_endpoints() -> None:
     assert launch.pod_id == "pod_123"
     assert status.pod_status == "RUNNING"
     assert disconnect.pod_status == "terminating"
+    assert cloud_manager.RUNPOD_CONNECTION_NOTE in launch.warnings
+    assert launch.details["request_timeout_seconds"] == config.request_timeout_seconds
     assert [call[0] for call in session.calls] == ["POST", "GET", "DELETE"]
     assert session.calls[0][1].endswith("/pods")
 

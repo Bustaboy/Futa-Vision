@@ -480,11 +480,35 @@ def start_general_physics_training(
     )
 
 
+def cloud_status_badge(cloud_mode: str) -> str:
+    """Return a compact color-coded cloud mode badge for prominent UI status."""
+
+    selected = cloud_mode if cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto"
+    status = cloud_manager.cloud_availability()
+    if selected == "Local":
+        label = "LOCAL ONLY"
+        color = "#166534"
+        background = "#dcfce7"
+    elif status.available:
+        label = f"{selected.upper()} READY"
+        color = "#1d4ed8"
+        background = "#dbeafe"
+    else:
+        label = f"{selected.upper()} → LOCAL FALLBACK"
+        color = "#92400e"
+        background = "#fef3c7"
+    return (
+        f"<div style='display:inline-block;padding:0.35rem 0.75rem;border-radius:999px;"
+        f"font-weight:700;color:{color};background:{background};border:1px solid {color}33;'>"
+        f"☁️ {label}</div>"
+    )
+
+
 def cloud_status_for_mode(cloud_mode: str) -> str:
     """Render Phase 4.1 cloud selector status for Setup and Generate tabs."""
 
     selected = cloud_mode if cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto"
-    return cloud_manager.cloud_status_markdown(selected)
+    return cloud_status_badge(selected) + "\n\n" + cloud_manager.cloud_status_markdown(selected)
 
 
 def launch_runpod_pod() -> str:

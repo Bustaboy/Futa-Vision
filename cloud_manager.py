@@ -48,6 +48,10 @@ DEFAULT_CONTAINER_DISK_GB = 80
 DEFAULT_VOLUME_GB = 80
 MIN_FREE_VRAM_FOR_LOCAL_WAN_GB = 3.0
 LONG_CLOUD_TARGET_SECONDS = 30
+RUNPOD_CONNECTION_NOTE = (
+    "RunPod pod boot/network readiness can lag after creation; if status checks time out, "
+    "wait 30-60 seconds and retry Refresh Cloud Status before falling back locally."
+)
 HEAVY_TASK_TYPES = {"training", "extension", "upscale", "regeneration", "final_upscale"}
 CLOUD_JOB_STATES = [
     "queued",
@@ -414,7 +418,13 @@ class RunPodClient:
             message="RunPod pod launch requested.",
             pod_id=self.config.pod_id,
             pod_status=status,
-            details={"runpod_response": pod, "request": {key: value for key, value in payload.items() if key != "env"}},
+            details={
+                "runpod_response": pod,
+                "request": {key: value for key, value in payload.items() if key != "env"},
+                "connection_note": RUNPOD_CONNECTION_NOTE,
+                "request_timeout_seconds": self.config.request_timeout_seconds,
+            },
+            warnings=[RUNPOD_CONNECTION_NOTE],
         )
         _append_audit_event("runpod_launch", cloud_status.to_dict())
         return cloud_status
@@ -928,6 +938,7 @@ def cloud_status_markdown(selected_mode: CloudMode = "Auto") -> str:
         f"- **Pod id:** `{status.pod_id or 'not configured'}`",
         f"- **Hardware mode:** `{report.recommended_mode}` ({report.mode_reason})",
         f"- **Cloud job states:** {', '.join(CLOUD_JOB_STATES)}",
+        f"- **RunPod retry note:** {RUNPOD_CONNECTION_NOTE}",
         "- **Privacy:** Local mode uploads nothing. Cloud/Auto packages a manifest that lists every workflow payload, asset, sidecar, and timeline slot before upload.",
     ]
     warnings = decision.get("warnings", []) or status.warnings
