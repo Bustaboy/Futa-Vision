@@ -16,6 +16,7 @@ echo   1. Find a working Python 3 installation
 echo   2. Install or refresh required Python packages
 echo   3. Run the Phase 5 installer / repair checks
 echo   4. Offer to launch the Gradio app in your browser
+echo   5. Print a simple sample verification command for later
 echo.
 echo RTX 4070 8GB note: setup uses safe local defaults: 720p,
 echo batch size 1, VRAM safety, and RunPod prompts for heavy jobs.
@@ -108,6 +109,18 @@ if errorlevel 1 (
 )
 
 echo.
+echo [Verification] Running a quick sample media verification...
+!PYTHON_CMD! installer.py test-samples
+if errorlevel 1 (
+    echo.
+    echo [WARNING] Sample verification reported a problem.
+    echo The app can still open, but please review logs\installer.log
+    echo and use the Settings tab Repair button before generation.
+) else (
+    echo [OK] Sample verification completed.
+)
+
+echo.
 echo ============================================================
 echo   Installation completed successfully!
 echo ============================================================
@@ -120,6 +133,9 @@ echo   4. Start with RTX 4070 8GB Safe presets before trying heavier jobs.
 echo.
 echo Launch command for later:
 echo   !PYTHON_CMD! main.py
+echo.
+echo Quick verification command for later:
+echo   !PYTHON_CMD! installer.py test-samples
 echo.
 choice /C YN /N /M "Launch Futa-Vision now? [Y/N]: "
 if errorlevel 2 goto done

@@ -7,6 +7,72 @@ The canonical project source document is available at:
 - [FutaSlime Director — Comprehensive Development Plan & Roadmap](docs/source_document.md)
 - [Futa-Vision — Product Roadmap](docs/product_roadmap.md)
 
+
+## Installation (Phase 5)
+
+Futa-Vision now includes a beginner-friendly Phase 5 installer. The installer is safe to rerun: it creates required folders, detects ComfyUI/Ostris/Pinokio when present, writes `settings/installer_manifest.json`, runs sample media checks, and keeps existing outputs/library files intact.
+
+### Option A — Recommended Windows setup.bat
+
+1. Install **Python 3.12 or newer** from <https://www.python.org/downloads/windows/>. During installation, enable **Add python.exe to PATH**.
+2. Download or clone this repository, then open the Futa-Vision folder in File Explorer.
+3. Double-click `setup.bat`. Keep the console window open while it:
+   - finds Python,
+   - updates `pip`,
+   - installs `requirements.txt`,
+   - runs the Phase 5 installer/repair checks,
+   - runs a quick sample verification,
+   - offers to launch the Gradio app.
+4. When the app opens, go to **⚙️ Settings** and confirm **Phase 5 Installer Status** is green. If it is yellow or red, click **🚀 Run Installer / Repair Installation (Recommended)**.
+
+### Option B — Pinokio recipe
+
+Use this path when you run AI apps through Pinokio and want Futa-Vision beside your existing portable ComfyUI/Ostris installs.
+
+1. In Pinokio, import or open the Futa-Vision recipe for this repository.
+2. Run the recipe install/start action. The recipe should call the same project setup flow as `setup.bat` or `python installer.py`.
+3. Launch Futa-Vision from Pinokio.
+4. Open **⚙️ Settings** and verify the installer badge. Pinokio, ComfyUI, and Ostris detections are written into `settings/installer_manifest.json` when found.
+
+### Option C — Manual Python installer
+
+Use this path for PowerShell, Command Prompt, Cursor, VS Code, or a manual virtual environment.
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python installer.py --non-interactive --accept-adult --privacy-ack
+python installer.py test-samples
+python main.py
+```
+
+Optional manual commands:
+
+```bash
+python installer.py detect --repair
+python installer.py repair --all
+```
+
+### First-run verification
+
+After any installation path, run this quick verification command from the repository root:
+
+```bash
+python installer.py test-samples
+```
+
+A successful verification writes a sample image and sample clip/placeholder under `outputs/`, refreshes `settings/installer_manifest.json`, and should make the Settings-tab installer badge green or yellow with only optional-path warnings.
+
+### RTX 4070 8GB troubleshooting
+
+- Keep **RTX 4070 8GB Safe — 720p generate + 1080p export** selected in **⚙️ Settings** for the first full run.
+- Leave **VRAM safety** enabled. Local generation should start at 720p, retry lower on OOM-like failures, and suggest RunPod for heavier jobs.
+- Use **LTX/speed** or short clips first; save Wan/long-duration/high-upscale jobs for cloud/offload or after the timeline is approved.
+- Close other GPU-heavy apps before generation. Browser video playback, games, OBS, and other AI tools can consume VRAM.
+- If CUDA/PyTorch fails, update NVIDIA drivers, reboot, then rerun `setup.bat` or `python installer.py repair --hardware-check`.
+- If ComfyUI nodes or model paths are missing, install them in ComfyUI/Pinokio, set `COMFYUI_PATH` in `.env` if needed, then rerun **Run Installer / Repair Installation**.
+- If the Settings badge is red or the manifest is corrupted, delete or rename `settings/installer_manifest.json` and rerun `setup.bat`; the app also falls back to safe defaults until repair completes.
+
 ## Phase 0 skeleton
 
 The current Phase 0 implementation is a runnable Gradio-first skeleton that mirrors the project roadmap in `docs/source_document.md` and the implementation guidance in `CURSOR_VIBE_CODING_GUIDE.md`. It uses the Phase 0 hardware policy from the source document: RTX 4070-class 8 GB systems should run `local_low_vram` with 720p generation, then final upscale using SeedVR 2.5 / RTX Video SR / Nomos2 after the timeline is approved.
