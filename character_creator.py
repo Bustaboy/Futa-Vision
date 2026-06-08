@@ -31,8 +31,10 @@ PREVIEW_WORKFLOW_VERSION = "phase5.5.low_res_character_preview.v2"
 DEFAULT_PREVIEW_WORKFLOW_PATH = Path("workflows/comfy/character_creator_low_res_preview.json")
 COMFYUI_URL_ENV_KEYS = ("FUTA_VISION_COMFYUI_URL", "COMFYUI_URL", "COMFYUI_HOST")
 COMFYUI_PREVIEW_TIMEOUT_SECONDS = 12
-COMFYUI_HISTORY_POLL_SECONDS = 18
+COMFYUI_HISTORY_POLL_SECONDS = 24
 COMFYUI_HISTORY_POLL_INTERVAL = 1.5
+COMFYUI_CLIENT_ID = "futa-vision-character-creator"
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +158,7 @@ def section_visibility(race: str, secondary_pack: str = "None") -> list[Any]:
     """Return Gradio visibility updates for every adaptive section."""
 
     visible = _enabled_sections(race, secondary_pack)
-    return [gr.update(visible=name in visible) for name in SECTION_LABELS]
+    return [gr.update(visible=name in visible, open=name in visible and name in {"slime", "animal", "horns", "tails", "wings", "scales", "synthetic", "eldritch", "alien"}) for name in SECTION_LABELS]
 
 
 def _race_defaults(race: str, secondary_pack: str = "None") -> dict[str, Any]:
@@ -259,6 +261,9 @@ def build_character_metadata(
     secondary_pack: str,
     trigger_words: str,
     creator_notes: str,
+    base_image_path: str | None,
+    base_image_strength: float,
+    base_image_notes: str,
     height: str,
     build: str,
     chest: str,
@@ -360,6 +365,7 @@ def build_character_metadata(
         "focus": {"preset": focus_preset, "primary_scene_focus": "adult futa-on-male", "safety_notes": "adult-only profile; avoid minor/childlike proportions"},
         "race": {"primary": pack.label, "secondary": secondary_pack, "family": pack.family, "enabled_sections": sorted(sections), "pack_versions": ["builtin.phase5.5.2"]},
         "identity": {"name": character_name.strip(), "tagline": tagline.strip(), "trigger_words": triggers, "visual_locks": list(pack.tags)},
+        "start_from_image": {"path": base_image_path, "strength": round(float(base_image_strength), 2), "notes": base_image_notes.strip(), "enabled": bool(base_image_path)},
         "body": {"archetype": body_archetype, "height": height, "build": build, "chest": chest, "hips": hips, "waist": waist, "posture": posture, "proportions": {"muscle_definition": round(float(muscle), 2), "softness": round(float(softness), 2)}},
         "face": {"shape": face_shape, "eyes": eye_style, "expression": expression, "makeup": makeup},
         "hair_head_features": {"style": hair_style, "color": hair_color, "notes": head_feature_notes},
@@ -372,7 +378,7 @@ def build_character_metadata(
         "prompts": {"identity": rich_prompt, "physics": physics_prompt, "style": style_preset, "rich_prompt": f"{rich_prompt}, {physics_prompt}, {style_preset}", "negative": f"{pack.negative_fragment}, minor, underage, childlike, non-consensual, broken anatomy, extra limbs, unstable futa anatomy, melted unreadable silhouette, low resolution, watermark, text"},
         "training": {"base_lora": "general_physics", "caption_hints": list(pack.tags), "recommended_rank": 12 if pack.family in {"advanced", "signature"} else 8, "hint": pack.training_hint},
         "library": {"tags": tags, "thumbnail": None, "score_history": []},
-        "preview": {"workflow_version": PREVIEW_WORKFLOW_VERSION, "workflow_path": str(DEFAULT_PREVIEW_WORKFLOW_PATH), "resolution": "512x768", "count": 1},
+        "preview": {"workflow_version": PREVIEW_WORKFLOW_VERSION, "workflow_path": str(DEFAULT_PREVIEW_WORKFLOW_PATH), "resolution": "512x768", "count": 1, "uses_base_image": bool(base_image_path)},
     }
 
 
@@ -405,6 +411,8 @@ def _render_workflow_template(workflow_text: str, payload: dict[str, Any]) -> di
         "{{height}}": str(payload["height"]),
         "{{steps}}": str(payload["steps"]),
         "{{cfg}}": str(payload["cfg"]),
+        "{{denoise}}": str(payload.get("denoise", 0.82)),
+        "{{base_image_path}}": str(payload.get("base_image_path") or ""),
     }
     rendered = workflow_text
     for placeholder, value in replacements.items():
@@ -418,7 +426,7 @@ def _render_workflow_template(workflow_text: str, payload: dict[str, Any]) -> di
 def _queue_comfyui_preview(workflow: dict[str, Any], comfyui_url: str) -> dict[str, Any]:
     """Submit a preview workflow to ComfyUI and return the queue response."""
 
-    request_payload = json.dumps({"prompt": workflow}).encode("utf-8")
+    request_payload = json.dumps({"prompt": workflow, "client_id": COMFYUI_CLIENT_ID}).encode("utf-8")
     request = urllib.request.Request(f"{comfyui_url}/prompt", data=request_payload, headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(request, timeout=COMFYUI_PREVIEW_TIMEOUT_SECONDS) as response:  # noqa: S310 - local ComfyUI URL is user-configured.
         raw = response.read().decode("utf-8")
@@ -485,6 +493,9 @@ def preview_character(*args: Any) -> tuple[str, str, str | None, Any]:
             "resolution": "512x768",
             "steps": 12,
             "cfg": 4.5,
+            "denoise": 0.72 if metadata["start_from_image"]["enabled"] else 0.88,
+            "base_image_path": metadata["start_from_image"]["path"],
+            "start_from_image": metadata["start_from_image"],
             "sampler": "low_vram_preview_default",
             "seed": seed,
             "prompt": metadata["prompts"]["rich_prompt"],
@@ -503,7 +514,7 @@ def preview_character(*args: Any) -> tuple[str, str, str | None, Any]:
         payload["workflow_node_count"] = len(workflow)
         comfyui_url = payload["comfyui_url"]
         if not comfyui_url:
-            status = "## ✅ Preview payload ready\nThe low-res workflow was found. Set `FUTA_VISION_COMFYUI_URL` or `COMFYUI_URL` to queue and retrieve a live preview image."
+            status = "## ✅ Preview payload ready\nThe low-res workflow was found and the payload is ready. Set `FUTA_VISION_COMFYUI_URL` or `COMFYUI_URL` to queue and retrieve a live preview image. If a base image is selected, the payload includes its path and denoise strength for workflows that support image-to-image."
             return status, json.dumps(payload, indent=2, sort_keys=True), None, button_ready
         queued = _queue_comfyui_preview(workflow, comfyui_url)
         prompt_id = str(queued.get("prompt_id") or queued.get("number") or "")
@@ -561,7 +572,7 @@ def create_character_for_scoring(anatomy_score: float, physics_score: float, sty
         prior_scores_text=prior_scores_text,
         name=name,
         trigger_word=trigger,
-        reference_sheet_images=[],
+        reference_sheet_images=[metadata["start_from_image"]["path"]] if metadata["start_from_image"]["enabled"] else [],
         tags=tags,
         prompt=prompt,
         save_to_library=save_to_library,
@@ -609,6 +620,12 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
                     secondary_pack = gr.Dropdown(SECONDARY_PACKS, value="None", label="Secondary trait/material pack")
                     trigger_words = gr.Textbox(label="Prompt trigger words", placeholder="fv_nyx_slime")
                 creator_notes = gr.Textbox(label="Creator notes / director notes", lines=3)
+                with gr.Accordion("Start from Base Image", open=False):
+                    gr.Markdown("Optional image-to-image/reference support. The selected file is preserved in metadata, sent to scoring as a reference when creating a character, and exposed to ComfyUI preview workflows through `{{base_image_path}}` and `{{denoise}}` placeholders.")
+                    base_image_path = gr.Image(label="Optional base/reference image", type="filepath")
+                    with gr.Row():
+                        base_image_strength = gr.Slider(0, 1, value=0.55, step=0.05, label="Reference strength")
+                        base_image_notes = gr.Textbox(label="Base image notes", value="preserve pose/silhouette only; let race/material settings drive final identity")
 
             with gr.Accordion("Body Proportions", open=True) as body_section:
                 with gr.Row():
@@ -741,12 +758,13 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
             create_character_button = gr.Button("Create Character", variant="primary", interactive=initial_interactive)
             create_status = gr.Markdown()
             create_metadata = gr.Code(label="Created character metadata JSON", language="json")
+            create_prompt = gr.Textbox(label="Created rich prompt", lines=4)
             create_scores = gr.Textbox(label="Updated weighted scores")
             create_result = gr.Code(label="Scoring/library loop result", language="json")
 
         metadata_inputs = [
             race, mode, focus_preset, body_archetype, futa_category, personality_tags, style_preset,
-            character_name, tagline, secondary_pack, trigger_words, creator_notes,
+            character_name, tagline, secondary_pack, trigger_words, creator_notes, base_image_path, base_image_strength, base_image_notes,
             height, build, chest, hips, waist, muscle, softness, posture,
             face_shape, eye_style, expression, makeup, hair_style, hair_color, head_feature_notes,
             futa_size, futa_shape, futa_details, futa_motion_stability, anatomy_consistency,
@@ -768,7 +786,7 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
         refresh_metadata_button.click(metadata_json, inputs=metadata_inputs, outputs=preview_payload)
         preview_button.click(preview_start_status, outputs=[preview_status, preview_button], show_progress="hidden").then(preview_character, inputs=metadata_inputs, outputs=[preview_status, preview_payload, preview_image, preview_button], show_progress="full")
 
-        create_outputs = [create_status, create_metadata]
+        create_outputs = [create_status, create_metadata, create_prompt]
         passthrough_outputs = [scoring_targets[key] for key in ("partner_prompt", "character_name", "trigger_word", "tag_text") if key in scoring_targets]
         score_outputs = [create_scores, create_result]
         if "prior_scores" in scoring_targets:
@@ -777,7 +795,7 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
 
         def _create_with_optional_partner_outputs(*args: Any) -> tuple[Any, ...]:
             handoff, metadata_text, prompt, name, trigger, tags, updated_scores, result_json = create_character_for_scoring(*args)
-            values: list[Any] = [handoff, metadata_text]
+            values: list[Any] = [handoff, metadata_text, prompt]
             for key in ("partner_prompt", "character_name", "trigger_word", "tag_text"):
                 if key in scoring_targets:
                     values.append({"partner_prompt": prompt, "character_name": name, "trigger_word": trigger, "tag_text": tags}[key])
