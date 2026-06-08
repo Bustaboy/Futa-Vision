@@ -1,17 +1,19 @@
 """Phase 4.2 final MP4 export, metadata, audio, and upscale orchestration.
 
-The exporter is intentionally local-first and deterministic for tests: when
-ffmpeg can process real media it writes an H.264/AAC MP4 with embedded metadata;
-when the project is still using Phase 2 placeholder artifacts it writes a small
-placeholder ``.mp4`` plus the exact same JSON sidecar contract.  This lets the
-Gradio app expose the final UX now while preserving a clean swap-in point for
-SeedVR 2.5, RTX Video SR, Nomos2, and cloud workers.
+The exporter is local-first and deterministic for tests.  When ffmpeg can read
+real media it writes a browser-friendly H.264/AAC MP4 with embedded metadata and
+a rich JSON sidecar.  When the app is still operating on Phase 2 placeholder
+artifacts, it writes a tiny placeholder ``.mp4`` plus the exact same sidecar
+contract so Gradio, timeline import, RunPod handoff, and release tooling can be
+validated before real ComfyUI/upscaler workers are installed.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import shlex
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -26,11 +28,12 @@ import video_assembly
 LOGGER = logging.getLogger(__name__)
 
 APP_VERSION = "phase4.2"
-EXPORT_SCHEMA_VERSION = "phase4.final_export.v1"
+EXPORT_SCHEMA_VERSION = "phase4.final_export.v2"
 DEFAULT_EXPORT_DIR = Path("outputs/final_videos")
 DEFAULT_EXPORT_RESOLUTION = "1920x1080"
 EXPORT_UPSCALE_STACK = ["SeedVR 2.5", "RTX Video SR", "Nomos2"]
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}
+DEFAULT_FFMPEG_TIMEOUT_SECONDS = 900
 ProgressCallback = Callable[[float, str], None]
 
 
@@ -52,6 +55,7 @@ class ExportSettings:
     upscale_engine: str = "SeedVR 2.5 / RTX Video SR / Nomos2"
     vram_safety_mode: bool = True
     faststart: bool = True
+    normalize_resolution: bool = True
 
     def normalized(self) -> "ExportSettings":
         """Clamp unsafe values and normalize known presets."""
@@ -88,6 +92,7 @@ class ExportSettings:
             upscale_engine=self.upscale_engine or "SeedVR 2.5 / RTX Video SR / Nomos2",
             vram_safety_mode=bool(self.vram_safety_mode),
             faststart=bool(self.faststart),
+            normalize_resolution=bool(self.normalize_resolution),
         )
 
 
@@ -153,12 +158,91 @@ def _ffmpeg_path() -> str | None:
     return shutil.which("ffmpeg")
 
 
+def _ffprobe_path() -> str | None:
+    return shutil.which("ffprobe")
+
+
 def _looks_like_placeholder(path: Path) -> bool:
     try:
-        head = path.read_bytes()[:256]
+        head = path.read_bytes()[:512]
     except OSError:
         return False
     return b"placeholder" in head.lower() or b"Futa-Vision Phase" in head
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sidecar_path_for(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".json")
+
+
+def _ffprobe_media(path: Path) -> dict[str, Any]:
+    ffprobe = _ffprobe_path()
+    if ffprobe is None or _looks_like_placeholder(path):
+        return {"available": False, "reason": "ffprobe unavailable or placeholder artifact"}
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
+    ]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
+        payload = json.loads(completed.stdout or "{}")
+    except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as exc:
+        return {"available": False, "reason": str(exc)}
+    streams = payload.get("streams", []) if isinstance(payload, dict) else []
+    format_payload = payload.get("format", {}) if isinstance(payload, dict) else {}
+    video_stream = next((item for item in streams if item.get("codec_type") == "video"), {})
+    audio_streams = [item for item in streams if item.get("codec_type") == "audio"]
+    return {
+        "available": True,
+        "duration_seconds": _safe_float(format_payload.get("duration"), 0.0),
+        "bit_rate": format_payload.get("bit_rate", ""),
+        "format_name": format_payload.get("format_name", ""),
+        "width": video_stream.get("width"),
+        "height": video_stream.get("height"),
+        "video_codec": video_stream.get("codec_name", ""),
+        "audio_streams": len(audio_streams),
+    }
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return round(float(value), 3)
+    except (TypeError, ValueError):
+        return default
+
+
+def _media_manifest(paths: list[str]) -> list[dict[str, Any]]:
+    manifest: list[dict[str, Any]] = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        placeholder = _looks_like_placeholder(path)
+        sidecar_path = _sidecar_path_for(path)
+        manifest.append(
+            {
+                "path": str(path),
+                "exists": path.exists(),
+                "bytes": path.stat().st_size if path.exists() else 0,
+                "sha256": _sha256(path) if path.exists() else "",
+                "placeholder": placeholder,
+                "sidecar_path": str(sidecar_path) if sidecar_path.exists() else "",
+                "sidecar_schema_version": _read_json(sidecar_path).get("schema_version", "") if sidecar_path.exists() else "",
+                "probe": _ffprobe_media(path),
+            }
+        )
+    return manifest
 
 
 def _parse_timeline_clips(timeline_state_json: str | dict[str, Any] | None) -> tuple[list[str], str]:
@@ -217,6 +301,27 @@ def _audio_warning(audio_path: str | None, include_audio: bool) -> str | None:
     return None
 
 
+def _resolution_dimensions(resolution: str) -> tuple[int, int]:
+    try:
+        width_text, height_text = resolution.lower().split("x", 1)
+        width = int(width_text)
+        height = int(height_text)
+    except (AttributeError, ValueError):
+        width, height = (1920, 1080)
+    width = max(16, width - (width % 2))
+    height = max(16, height - (height % 2))
+    return width, height
+
+
+def _concat_file_line(path: Path) -> str:
+    escaped = str(path.resolve()).replace("'", "'\\''")
+    return f"file '{escaped}'\n"
+
+
+def _redacted_command(command: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in command)
+
+
 def _build_metadata(
     project_title: str,
     characters_used: list[str],
@@ -226,6 +331,8 @@ def _build_metadata(
     audio_path: str | None,
 ) -> dict[str, Any]:
     hardware_settings = hardware_check.get_low_vram_settings()
+    source_manifest = _media_manifest(source_clips)
+    audio_manifest = _media_manifest([audio_path])[0] if audio_path else None
     return {
         "title": project_title or "Futa-Vision Final Export",
         "app": "Futa-Vision Director",
@@ -234,11 +341,13 @@ def _build_metadata(
         "characters_used": characters_used,
         "scene_prompt": prompt or "",
         "source_clips": source_clips,
+        "source_manifest": source_manifest,
         "settings": asdict(settings),
         "hardware_profile": hardware_settings,
         "4070_8gb_policy": "720p local generation, VRAM-safe export, final 1080p+ upscale pass when enabled.",
         "upscale_stack": EXPORT_UPSCALE_STACK,
-        "audio_track": {"enabled": settings.include_audio, "path": audio_path or ""},
+        "audio_track": {"enabled": settings.include_audio, "path": audio_path or "", "manifest": audio_manifest},
+        "mp4_metadata_keys": ["title", "comment", "description", "software", "futa_vision_schema", "futa_vision_export_id"],
     }
 
 
@@ -259,24 +368,43 @@ def _write_placeholder_export(path: Path, result: ExportResult) -> None:
     )
 
 
+def _select_mux_sources(source_clips: list[str], upscaled_paths: list[str]) -> tuple[list[str], str]:
+    """Use real upscaled artifacts only; never let placeholders block real MP4 muxing."""
+
+    if not upscaled_paths:
+        return source_clips, "original_sources"
+    usable_upscaled = [path for path in upscaled_paths if Path(path).exists() and not _looks_like_placeholder(Path(path))]
+    if len(usable_upscaled) == len(upscaled_paths):
+        return usable_upscaled, "upscaled_sources"
+    original_placeholders = any(_looks_like_placeholder(Path(path)) for path in source_clips)
+    if original_placeholders:
+        return upscaled_paths, "placeholder_upscale_sources"
+    return source_clips, "original_sources_upscale_placeholder_ignored"
+
+
 def _ffmpeg_export(
     source_clips: list[str],
     output_path: Path,
     audio_path: str | None,
     metadata: dict[str, Any],
     settings: ExportSettings,
-) -> tuple[bool, str]:
+    export_id: str,
+) -> tuple[bool, str, list[str]]:
     ffmpeg = _ffmpeg_path()
     if ffmpeg is None:
-        return False, "ffmpeg is not installed; wrote deterministic placeholder export."
+        return False, "ffmpeg is not installed; wrote deterministic placeholder export.", []
     if any(_looks_like_placeholder(Path(clip)) for clip in source_clips):
-        return False, "Source clips are placeholder artifacts; wrote deterministic placeholder export."
+        return False, "Source clips are placeholder artifacts; wrote deterministic placeholder export.", []
 
     concat_path = output_path.with_suffix(".concat.txt")
-    concat_path.write_text("".join(f"file '{Path(clip).resolve()}'\n" for clip in source_clips), encoding="utf-8")
+    temp_output = output_path.with_suffix(".tmp.mp4")
+    concat_path.write_text("".join(_concat_file_line(Path(clip)) for clip in source_clips), encoding="utf-8")
     command = [
         ffmpeg,
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-f",
         "concat",
         "-safe",
@@ -284,8 +412,11 @@ def _ffmpeg_export(
         "-i",
         str(concat_path),
     ]
-    if settings.include_audio and audio_path and Path(audio_path).exists():
+    has_audio = settings.include_audio and audio_path and Path(audio_path).exists()
+    if has_audio:
         command.extend(["-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0", "-shortest"])
+    width, height = _resolution_dimensions(settings.target_resolution)
+    vf_filter = f"scale={width}:{height}:flags=lanczos,format={settings.pixel_format}"
     command.extend(
         [
             "-c:v",
@@ -296,32 +427,45 @@ def _ffmpeg_export(
             settings.preset,
             "-r",
             str(settings.fps),
-            "-pix_fmt",
-            settings.pixel_format,
         ]
     )
-    if settings.include_audio and audio_path and Path(audio_path).exists():
+    if settings.normalize_resolution:
+        command.extend(["-vf", vf_filter])
+    else:
+        command.extend(["-pix_fmt", settings.pixel_format])
+    if has_audio:
         command.extend(["-c:a", settings.audio_codec, "-b:a", settings.audio_bitrate])
     else:
         command.extend(["-an"])
     if settings.faststart:
         command.extend(["-movflags", "+faststart"])
+    embedded_summary = {
+        "schema_version": EXPORT_SCHEMA_VERSION,
+        "export_id": export_id,
+        "characters_used": metadata["characters_used"],
+        "settings": metadata["settings"],
+        "version": APP_VERSION,
+    }
     for key, value in {
         "title": metadata["title"],
-        "comment": json.dumps({"characters_used": metadata["characters_used"], "version": APP_VERSION}, sort_keys=True),
+        "comment": json.dumps(embedded_summary, sort_keys=True),
         "description": metadata.get("scene_prompt", ""),
         "software": "Futa-Vision Director",
+        "futa_vision_schema": EXPORT_SCHEMA_VERSION,
+        "futa_vision_export_id": export_id,
     }.items():
         command.extend(["-metadata", f"{key}={value}"])
-    command.append(str(output_path))
+    command.append(str(temp_output))
 
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True, timeout=900)
+        subprocess.run(command, check=True, capture_output=True, text=True, timeout=DEFAULT_FFMPEG_TIMEOUT_SECONDS)
+        temp_output.replace(output_path)
     except (subprocess.SubprocessError, OSError) as exc:
-        return False, f"ffmpeg export failed; wrote placeholder instead: {exc}"
+        temp_output.unlink(missing_ok=True)
+        return False, f"ffmpeg export failed; wrote placeholder instead: {exc}", command
     finally:
         concat_path.unlink(missing_ok=True)
-    return True, "ffmpeg wrote high-quality H.264 MP4 export."
+    return True, "ffmpeg wrote high-quality H.264 MP4 export.", command
 
 
 def validate_export_sidecar(sidecar_path: str | Path) -> list[str]:
@@ -344,9 +488,14 @@ def validate_export_sidecar(sidecar_path: str | Path) -> list[str]:
         errors.append("Export metadata must include characters_used")
     if metadata.get("version") != APP_VERSION:
         errors.append("Export metadata must include the current app version")
+    if not metadata.get("source_manifest"):
+        errors.append("Export metadata must include source_manifest")
     settings = payload.get("settings") if isinstance(payload.get("settings"), dict) else {}
     if settings.get("final_upscale_enabled") and metadata.get("upscale_stack") != EXPORT_UPSCALE_STACK:
         errors.append("Enabled upscale exports must record the SeedVR/RTX/Nomos stack")
+    for item in metadata.get("source_manifest", []):
+        if not item.get("sha256"):
+            errors.append(f"Source manifest missing sha256 for {item.get('path')}")
     return errors
 
 
@@ -375,7 +524,7 @@ def export_final_video(
     characters_used = _character_metadata(selected_character_ids)
     if not characters_used:
         characters_used = ["unregistered_timeline_character"]
-    title = project_title or timeline_title or "Futa-Vision Final Export"
+    title = timeline_title if project_title == "Futa-Vision Final Export" and timeline_title != "Untitled timeline" else (project_title or timeline_title or "Futa-Vision Final Export")
     warnings: list[str] = []
     audio_message = _audio_warning(audio_path, export_settings.include_audio)
     if audio_message:
@@ -385,28 +534,39 @@ def export_final_video(
     export_dir.mkdir(parents=True, exist_ok=True)
     _progress(progress, 0.15, "Preparing final export metadata and VRAM-safe settings")
 
-    upscale_source_clips = source_clips
-    upscale_sidecar = ""
+    upscaled_paths: list[str] = []
+    upscale_sidecars: list[str] = []
     if export_settings.final_upscale_enabled:
         _progress(progress, 0.45, "Running final 1080p+ upscale pass metadata through SeedVR/RTX/Nomos stack")
         try:
             upscale_result = video_assembly.final_upscale(source_clips, progress=progress)
-            upscale_source_clips = [upscale_result.artifact_path]
-            upscale_sidecar = upscale_result.sidecar_path
+            upscaled_paths = [upscale_result.artifact_path]
+            upscale_sidecars = [upscale_result.sidecar_path]
         except Exception as exc:  # noqa: BLE001 - final export should remain possible with original clips.
             warnings.append(f"Final upscale placeholder/pass unavailable; exporting original clips: {exc}")
-            upscale_source_clips = source_clips
 
+    mux_sources, mux_source_policy = _select_mux_sources(source_clips, upscaled_paths)
     metadata = _build_metadata(title, characters_used, scene_prompt, export_settings, source_clips, audio_path)
-    metadata["upscale_sidecar"] = upscale_sidecar
-    metadata["upscaled_sources_used_for_mux"] = upscale_source_clips
+    metadata["upscale"] = {
+        "enabled": export_settings.final_upscale_enabled,
+        "stack": EXPORT_UPSCALE_STACK,
+        "sidecars": upscale_sidecars,
+        "artifacts": upscaled_paths,
+        "mux_sources": mux_sources,
+        "mux_source_policy": mux_source_policy,
+    }
+    # Backward-compatible keys used by Version 2 callers/tests.
+    metadata["upscale_sidecar"] = upscale_sidecars[0] if upscale_sidecars else ""
+    metadata["upscaled_sources_used_for_mux"] = mux_sources
     export_id = _export_id()
     export_path = export_dir / f"{export_id}.mp4"
     sidecar_path = export_path.with_suffix(".mp4.json")
 
     _progress(progress, 0.75, "Writing final MP4 export with metadata and optional audio")
-    ffmpeg_ok, ffmpeg_message = _ffmpeg_export(upscale_source_clips, export_path, audio_path, metadata, export_settings)
+    ffmpeg_ok, ffmpeg_message, ffmpeg_command = _ffmpeg_export(mux_sources, export_path, audio_path, metadata, export_settings, export_id)
     logs = [ffmpeg_message]
+    if ffmpeg_command:
+        logs.append("ffmpeg command: " + _redacted_command(ffmpeg_command))
     status = "complete" if ffmpeg_ok else "placeholder_complete"
 
     result = ExportResult(
@@ -423,6 +583,8 @@ def export_final_video(
     )
     if not ffmpeg_ok:
         _write_placeholder_export(export_path, result)
+    # Record final artifact checksum after either real ffmpeg output or placeholder fallback exists.
+    result.metadata["export_artifact"] = _media_manifest([result.export_path])[0]
     _write_json(sidecar_path, result.to_dict())
     validation_errors = validate_export_sidecar(sidecar_path)
     if validation_errors:
@@ -437,6 +599,7 @@ def result_to_markdown(result: ExportResult | dict[str, Any]) -> str:
     payload = asdict(result) if isinstance(result, ExportResult) else result
     metadata = payload.get("metadata", {})
     settings = payload.get("settings", {})
+    upscale = metadata.get("upscale", {})
     lines = [
         f"## ✅ Phase 4.2 final export `{payload.get('status')}`",
         f"- Export: `{payload.get('export_path')}`",
@@ -445,6 +608,7 @@ def result_to_markdown(result: ExportResult | dict[str, Any]) -> str:
         f"- Version: `{metadata.get('version', APP_VERSION)}`",
         f"- Quality preset: `{settings.get('quality_preset')}` → `{settings.get('target_resolution')}`",
         f"- Upscale stack: `{', '.join(metadata.get('upscale_stack', EXPORT_UPSCALE_STACK))}`",
+        f"- Mux source policy: `{upscale.get('mux_source_policy', 'original_sources')}`",
     ]
     if metadata.get("audio_track", {}).get("enabled"):
         lines.append(f"- Audio: `{metadata['audio_track'].get('path') or 'enabled without source'}`")
