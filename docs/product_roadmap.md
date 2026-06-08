@@ -51,6 +51,54 @@ The roadmap below keeps the same professional structure for every phase:
 
 ---
 
+## Phase 0 — MVP Baseline Consolidation & Documentation
+
+**Estimated effort/time:** completed / ongoing maintenance.
+
+### Goals and key features
+
+Phase 0 is the current working baseline that all future roadmap phases must preserve. It is not only a prototype; it is the contract for scoring, metadata, file layout, local-first execution, and long-form assembly.
+
+Key features to maintain:
+
+- Gradio-first runnable skeleton for fast iteration.
+- Hardware detection with explicit RTX 4070 8 GB guidance.
+- Default `local_low_vram` policy: 720p generation, short clips, conservative batch sizes, final upscale after timeline approval.
+- Adult-content confirmation gate before generation/edit controls where configured.
+- Weighted starter-image scoring: Anatomy 40%, Physics 40%, Style 20%, approval when the rolling average across 10 images is >=80.
+- General Physics / Anatomy Base LoRA training path with strict physics-only caption sanitization.
+- Character Library shell for fixed male and reusable partner LoRAs.
+- Video-generation pipeline shell with deterministic sidecars, Wan/LTX intent, MotionDirector planning, smart-loop metadata, auto-review categories, and upscale metadata.
+- Timeline with reorder, trim, preview, save/load, and clip provenance.
+- Basic chat parser and targeted regeneration interface.
+- RunPod hybrid/cloud manager and exporter with metadata.
+
+### Value added / unique proposition
+
+Phase 0 proves the product architecture: Futa-Vision is a cohesive director workflow rather than disconnected scripts. It establishes the non-negotiable loop of create -> score -> train -> generate -> review -> assemble -> export, with metadata preserved at each step.
+
+### Technical approach and MVP integration
+
+- Treat Phase 0 modules as public internal contracts until replaced by explicitly versioned APIs.
+- Preserve JSON sidecars for generation, review, cloud dispatch, timeline operations, and exports.
+- Keep smoke tests for hardware policy, scoring math, library indexing, timeline operations, chat parsing, regeneration, cloud manager behavior, and exporter metadata.
+- Document every new phase as an extension of the current MVP rather than an unrelated rewrite.
+
+### Success criteria
+
+- Full regression suite remains green after roadmap-driven documentation or feature changes.
+- A fresh developer can follow README setup instructions and launch the app.
+- Scoring math remains stable: Anatomy 40%, Physics 40%, Style 20%, threshold >=80 over 10 images.
+- Phase 0 sidecar schemas remain readable by later phases or include migrations.
+- Hardware check continues to recommend 720p + upscale defaults for RTX 4070 8 GB systems.
+
+### Dependencies
+
+- Python 3.12+ environment.
+- Current Gradio UI.
+- Existing test suite.
+- MVP modules for scoring, training, library, video assembly, timeline, chat parsing, regeneration, cloud, and export.
+
 ## Phase 1 — Character Library Hardening & Identity Lock
 
 **Estimated effort/time:** 3-5 weeks.
@@ -1066,6 +1114,100 @@ Must-have workflow features:
   - register the trained partner in the Character Library;
   - preserve all metadata for later editing/forking.
 
+### Adaptive UI behavior and mode switching
+
+The creator should behave like an intelligent form engine:
+
+- **Race/type selection changes the form immediately.** Choosing Slime reveals material and flow controls; choosing Dragonkin reveals scales, horns, wings, and tail controls; choosing Android reveals synthetic skin and emissive-panel fields; choosing Harpy reveals wing and feather controls.
+- **Material selection changes prompt and preview defaults.** Skin, slime, fur, scales, feathers, synthetic panels, glowing markings, and glassy materials each need different positive prompts, negative prompts, preview lighting, and review checks.
+- **Mode switching is non-destructive.** A user can start in quick mode, open advanced mode, adjust detailed sliders, and return to quick mode without losing advanced data.
+- **Fields have trainability hints.** The UI should warn when a profile is likely to be difficult for a lightweight LoRA, such as combining too many feature packs, extreme material transparency, many appendages, or conflicting color/texture rules.
+- **Presets remain editable.** Built-in presets are starting points, not locked templates. Users can fork, mutate, save, and share preset variants.
+
+Recommended interface layout:
+
+1. **Concept panel** — race/type, material, body archetype, quick preset, intended role.
+2. **Visual identity panel** — face, hair, colors, markings, fantasy traits.
+3. **Anatomy and physics panel** — futa-specific controls, body response, contact emphasis, motion stability.
+4. **Material panel** — skin/slime/fur/scales/feathers/synthetic settings.
+5. **Behavior panel** — personality, scene behavior tags, future voice defaults.
+6. **Prompt panel** — generated prompt sections, negative prompt, Wan/LTX variants.
+7. **Preview panel** — low-res variants, seed lock, randomize, promote to scoring.
+8. **Training panel** — caption preview, LoRA settings, metadata validation, approval handoff.
+
+### Quick/basic mode workflow
+
+Quick mode should produce a usable draft with minimal friction:
+
+1. Select adult partner type: futa, slime, slime futa, fantasy futa, or hybrid.
+2. Select race/species or choose “surprise me.”
+3. Select body archetype and visual preset.
+4. Select physics priority: balanced, contact clarity, deformation emphasis, slime flow, or identity stability.
+5. Select personality/behavior preset.
+6. Generate a 2x2 or 4x low-res preview grid.
+7. Choose a preferred preview and send it to the 10-20 image scoring batch.
+
+Quick mode success should be measured by how often a user can reach the scoring grid without manually editing a prompt.
+
+### Deep customization mode workflow
+
+Deep mode should satisfy power users who want precise control:
+
+1. Start from a preset, random seed, base image, or blank profile.
+2. Configure race/species, secondary traits, body proportions, face, hair, material, outfit, personality, and physics.
+3. Review structured prompt sections and generated caption hints.
+4. Run low-res previews with locked seed or mutation strength.
+5. Compare variants against a metadata checklist.
+6. Promote approved previews to starter-image generation.
+7. Score with the existing Anatomy 40% / Physics 40% / Style 20% loop.
+8. Train the partner LoRA only after the rolling score threshold is met.
+
+### JSON metadata contract
+
+Every Character Creator output should save a complete, editable metadata object. A simplified conceptual shape:
+
+```json
+{
+  "schema_version": "character_profile.v1",
+  "role": "slime_futa_partner",
+  "adult_only": true,
+  "race": { "primary": "slime", "secondary": "kitsune", "pack_versions": [] },
+  "identity": { "name": "", "trigger_words": [], "visual_locks": [] },
+  "body": { "archetype": "", "proportions": {}, "physics_emphasis": {} },
+  "material": { "type": "slime", "viscosity": 0.6, "translucency": 0.5, "gloss": 0.8 },
+  "futa_anatomy": { "preset": "balanced", "consistency_priority": "high" },
+  "behavior": { "personality_tags": [], "director_notes": "" },
+  "prompts": { "identity": "", "physics": "", "style": "", "negative": "" },
+  "training": { "base_lora": "general_physics", "caption_hints": [], "recommended_rank": null },
+  "library": { "tags": [], "thumbnail": null, "score_history": [] }
+}
+```
+
+The exact schema can evolve, but the separation must remain: visual identity, material/race traits, physics inheritance, prompts, scoring history, and training settings should be distinct so later systems can edit one area without corrupting another.
+
+### Base image and trait extraction details
+
+Starting from a base image should be a guided conversion process:
+
+- The app analyzes broad visual traits: apparent race/species cues, hair, face shape, skin/material, markings, outfit, and body archetype.
+- The user reviews extracted traits before they become training metadata.
+- The app separates traits that belong in the partner LoRA from reusable traits that belong in race/material packs.
+- The app warns if the base image conflicts with the selected race/material.
+- The app can generate “faithful,” “stylized,” and “physics-optimized” preview variants from the same base.
+
+### Creator validation and review checks
+
+Before training, the creator should run validation checks:
+
+- Required fields are present.
+- Adult-only confirmation is stored.
+- Race/material fields are compatible with selected workflow.
+- Prompt fragments do not contradict each other.
+- Identity fields do not include fixed male references.
+- Physics fields reference General Physics Base LoRA inheritance rather than duplicating identity traits.
+- Slime profiles have material controls and negative prompts for melting/flicker/readability issues.
+- Multi-character compatibility mode includes region/control guidance.
+
 ### Value added / unique proposition
 
 The Adaptive Character Creator is one of Futa-Vision's strongest differentiators. It gives users the creative depth of an RPG character creator, the speed of presets/randomization, and the technical structure required for consistent LoRA training. It also solves a major prompt-engineering problem: fantasy races, slime materials, futa anatomy controls, physics emphasis, and style settings become structured data rather than fragile prompt paragraphs.
@@ -1480,6 +1622,74 @@ Proposed improvement loop:
 8. Present results to the user.
 9. Promote only after approval.
 10. Keep rollback available.
+
+### Guided session lifecycle
+
+A guided self-improvement session should be a concrete workflow, not a vague chat feature:
+
+1. **Trigger.** A session starts because the user requests one, auto-review detects repeated low scores, or analytics identifies a recurring weakness such as low Physics scores or fixed male identity drift.
+2. **Diagnosis.** The LLM reviews clip sidecars, scoring history, prompt fragments, workflow settings, and user notes to summarize the suspected issue.
+3. **Plan.** The app proposes a small targeted experiment: usually 3-4 short clips, each varying only one or two controlled factors.
+4. **Generate.** Clips are generated locally at 720p low-VRAM settings or dispatched to RunPod if the user approves cloud execution.
+5. **Review prompt.** The assistant asks specific, natural questions in the user's preferred tone.
+6. **User feedback.** The user provides free-form feedback, scores, rankings, or frame-specific notes.
+7. **Parse.** The local LLM extracts structured observations, failure tags, preferred settings, and candidate training labels.
+8. **Follow-up.** If feedback is ambiguous, the LLM asks one or two focused follow-up questions instead of guessing.
+9. **Apply.** The app proposes immediate prompt/workflow changes, optional preset updates, or candidate examples for future training.
+10. **Validate.** A second mini-batch confirms whether the change improved the target weakness.
+11. **Promote.** Lessons are saved to training memory, and only user-approved examples become LoRA update candidates.
+
+### Example conversational loops
+
+The assistant should speak like a practical creative coach. Example patterns:
+
+- “Hey Busta, I made these 3-4 short clips to improve futa thrusting physics and skin stretching. Please watch them and tell me which clip has the clearest contact, which one looks too stiff or floaty, and whether the pressure on the receiving body reads correctly.”
+- “I see Clip B scored higher on Physics but lower on Style. Do you want me to preserve Clip B's motion settings while bringing back the softer lighting from Clip A?”
+- “The fixed male identity drifted in frames 40-70. Should I prioritize FaceID strength, reduce partner LoRA influence, or regenerate with stricter ControlNet guidance?”
+- “The slime material is readable, but the shape collapses during motion. Should I increase shape stability, reduce flow intensity, or try a higher-viscosity profile?”
+
+The user should never need to know the exact implementation details of prompts, LoRA deltas, or workflow nodes to give useful feedback. The LLM translates creative feedback into structured actions.
+
+### Feedback extraction schema
+
+The LLM should convert user responses into a structured object with fields such as:
+
+```json
+{
+  "target_area": "physics_anatomy",
+  "preferred_clip_ids": ["clip_b"],
+  "rejected_clip_ids": ["clip_a", "clip_c"],
+  "positive_observations": ["clearer pressure response", "better rhythm"],
+  "negative_observations": ["skin stretch too weak", "partner anatomy drift"],
+  "suggested_actions": ["increase contact guidance", "preserve lighting from clip_a"],
+  "training_candidate": true,
+  "generalizable_lesson": true,
+  "character_specific_lesson": false,
+  "confidence": 0.82
+}
+```
+
+This structured output lets the app decide whether a lesson belongs in prompt presets, workflow settings, a character profile, a slime material profile, a motion preset, or a General Physics Base LoRA update candidate set.
+
+### Smart follow-up behavior
+
+The local LLM should ask follow-up questions only when needed. Good follow-ups are narrow and actionable:
+
+- “When you say the motion looks wrong, is it the rhythm, the body recoil, or the contact alignment?”
+- “Is the character's face drifting, or is the body shape/proportion changing?”
+- “For slime, is the issue transparency, flow direction, or shape stability?”
+- “Do you want this lesson applied globally to the General Physics Base LoRA, or only to this character/scene?”
+
+### Training safety and promotion gates
+
+Guided training must remain conservative:
+
+- The LLM can propose updates but cannot silently promote a new General Physics Base LoRA.
+- At least a minimum number of approved examples should be required before a delta training job.
+- Base updates must run against fixed validation prompts and known characters.
+- Character-specific visual lessons must be blocked from the General Physics Base LoRA dataset.
+- Every promoted base version needs rollback metadata.
+- Users should be able to compare old vs new outputs side by side before promotion.
 
 ### Value added / unique proposition
 
@@ -1970,6 +2180,23 @@ Creators can make better decisions when the app explains where time, money, and 
 
 ---
 
+## Roadmap-Wide Acceptance Metrics
+
+These metrics should be tracked across phases so success is measurable rather than subjective:
+
+- **Install reliability:** percentage of supported Windows installs that complete first-run validation without manual dependency repair.
+- **Local viability:** percentage of RTX 4070 8 GB benchmark tasks that complete using the default 720p + upscale workflow without OOM.
+- **Character creation throughput:** median time from Character Creator concept to first scoring batch.
+- **Character approval rate:** percentage of starter batches that reach >=80 rolling score after one, two, or three iterations.
+- **Physics quality:** average Physics score and rejection reasons across approved clips.
+- **Identity stability:** fixed male and partner identity drift rates across long timelines.
+- **Trait leakage:** measured frequency of visual traits crossing between partner LoRAs in multi-character tests.
+- **Timeline productivity:** time required to assemble and export 3-minute, 5-minute, and 15-minute benchmark projects.
+- **Cloud usefulness:** RunPod task success rate, cost per approved minute, and recovery rate after interrupted jobs.
+- **Guided learning impact:** before/after score deltas for guided self-improvement sessions and General Physics Base LoRA delta updates.
+
+---
+
 ## Cross-Phase Technical Principles
 
 ### Hardware realism
@@ -2194,6 +2421,37 @@ These ideas are intentionally expansive and can be prioritized, trimmed, or post
 - Self-supervised clip ranking from user approvals.
 - Active-learning queues for the General Physics Base LoRA.
 - Automated A/B testing of workflow changes.
+
+### Model evaluation and leaderboard mode
+
+- Local benchmark leaderboard for base models, video models, LoRA versions, upscalers, and workflow presets.
+- Per-hardware benchmark profiles for RTX 4070, 4080, 4090, and cloud GPUs.
+- Side-by-side model bake-offs using identical characters, prompts, seeds, and review metrics.
+- Regression alerts when a new workflow improves style but worsens physics or identity.
+
+### Accessibility and usability enhancements
+
+- Guided onboarding projects.
+- Tooltips explaining LoRA, ControlNet, FaceID, RunPod, and upscale concepts in plain language.
+- “Recommended settings” buttons beside advanced controls.
+- Colorblind-friendly score charts.
+- Large-preview review mode.
+- Keyboard-only scoring workflow for fast review.
+
+### Storage, archival, and cleanup tools
+
+- Identify unused previews, failed clips, superseded LoRA checkpoints, and orphaned sidecars.
+- Archive completed projects to compressed bundles.
+- Keep high-quality final outputs while pruning low-score drafts.
+- Move cold projects to external drives while preserving library references.
+- Disk usage forecasting before overnight batches.
+
+### Scene intelligence and continuity memory
+
+- Scene bible per project: character rules, location rules, lighting rules, motion rules, and forbidden changes.
+- Continuity memory that follows a character across multiple videos.
+- Automatic reminders when a requested edit conflicts with the scene bible.
+- Reusable director styles for creators who repeatedly prefer the same lighting, rhythm, camera, and material behavior.
 
 ---
 
