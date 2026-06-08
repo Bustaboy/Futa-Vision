@@ -2,32 +2,52 @@
 
 ## Overall Vision
 
-Futa-Vision is a local-first desktop director for adult creators who want high-quality, semi-realistic 3D anime **futa-on-male** video generation with reliable character consistency, strong guided quality control, and unusually strong contact/physics behavior. The product differentiates itself by treating anatomy, contact deformation, pressure response, rhythm, lighting, and long-form continuity as first-class production features rather than incidental prompt outcomes.
+Futa-Vision is a local-first desktop director for adult creators who want high-quality, semi-realistic 3D anime **futa-on-male** video generation with stable character identity, unusually strong contact/physics behavior, transparent quality gates, and long-form production tooling. The product is not intended to be a generic prompt box. It should feel like a specialized creator studio where characters, physics rules, clips, audio, timelines, and iterative training all work together.
 
-The strategic goal is to become the best end-to-end creator tool for adult futa-on-male videos on consumer hardware, with a default path optimized for an **RTX 4070 8 GB** workstation: generate at 720p with low-VRAM settings, review and assemble clips locally, then upscale the approved timeline to 1080p or higher. RunPod hybrid mode remains a seamless escape hatch for heavy training, extension, and upscale jobs while keeping user direction, scoring, review, library metadata, and final assembly under local control.
+The strategic goal is to become the best end-to-end creator tool for adult futa-on-male videos on consumer hardware, especially an **RTX 4070 8 GB** workstation. The default production path is:
+
+1. create or load a locked fixed male receiver/POV character;
+2. create or load one or more futa/slime/fantasy partners;
+3. generate 720p candidate images/clips with low-VRAM-safe settings;
+4. score, reject, regenerate, and refine until quality thresholds are met;
+5. assemble approved clips into a timeline;
+6. extend/loop intelligently for long-form videos;
+7. upscale only after the timeline is approved;
+8. optionally offload heavy training, generation, extension, or upscale jobs to RunPod while keeping review, scoring, metadata, and creative direction local.
 
 Core product pillars:
 
-1. **Futa-on-male excellence.** The primary creative target is futa-on-male content with strong contact physics: pressure deformation, skin stretching, indented flesh on contact, correct futa anatomy/proportions, coherent rhythm, and stable body interaction across clips.
-2. **Reusable character identity.** A fixed male receiver/POV character is trained once, locked, and stabilized forever using IP-Adapter FaceID plus ControlNet. Partner characters are reusable lightweight LoRAs that inherit general anatomy/physics behavior from a shared General Physics Base LoRA without leaking specific visual traits between characters.
-3. **High-value secondary niches.** Slime-on-male, slime futas, and multi-race futas including demon, elf, orc, and animal hybrids should feel native to the system rather than prompt hacks.
-4. **Semi-realistic 3D anime style.** Outputs should emphasize subsurface scattering, soft dynamic lighting, polished render feel, and pronounced body/physics response.
-5. **User-guided quality loops.** The application should repeatedly generate, score, learn, and regenerate until approved, using transparent weighted scoring and targeted correction rather than opaque one-shot generation.
-6. **Long-form production.** The tool should support videos up to 15+ minutes through smart looping, extension, clip review, timeline editing, metadata-rich exports, and later AI director/scripted scene systems.
+1. **Futa-on-male excellence.** The primary creative target is futa-on-male content with strong contact physics: pressure response, skin indentation, stretch/deformation cues, correct proportions, coherent rhythm, believable weight transfer, and stable body interaction across clips.
+2. **Reusable locked identity.** The fixed male receiver/POV character is trained once, approved, locked, and reused indefinitely through IP-Adapter FaceID, ControlNet references, and immutable library metadata.
+3. **Modular partner creation.** New futa, slime, slime-futa, and fantasy-race partners use lightweight per-character LoRAs. They inherit general anatomy/physics behavior from the shared General Physics Base LoRA but must not inherit unrelated visual identity traits such as previous characters' skin color, hair, eyes, markings, or outfits.
+4. **Semi-realistic 3D anime style.** The default house style emphasizes polished 3D anime forms, subsurface scattering, soft dynamic lighting, controlled gloss, readable anatomy, and pronounced body/physics response.
+5. **Transparent quality control.** Manual and automatic review should be visible, weighted, repeatable, and actionable. The user should understand why something passed, failed, or was regenerated.
+6. **Long-form production.** The product should create videos up to 15+ minutes through short approved clips, smart looping, extension, targeted regeneration, timeline assembly, audio lanes, final upscale, and metadata-rich exports.
+7. **Local-first privacy with optional cloud acceleration.** Sensitive identity references, voice profiles, prompts, scoring notes, and generated outputs remain local unless the user explicitly dispatches a job to RunPod or another future cloud provider.
 
 ## Current MVP Baseline
 
-The current MVP already establishes the foundation for a production workflow:
+The current MVP establishes the core production loop and should be treated as the foundation for future phases rather than a disposable prototype.
 
-- **Weighted manual scoring loop** for starter images using Anatomy 40%, Physics 40%, Style 20%, repeating until the average score across 10 images reaches at least 80.
-- **General Physics / Anatomy Base LoRA** as the shared foundation for anatomy, contact, pressure deformation, and style behavior.
-- **Character Library** for persistent reuse of fixed male and partner characters across singles, threesomes, and larger multi-character scenes, with future support for regional ControlNets and LayerDiffuse to isolate character influence.
-- **ComfyUI + Ostris pipeline shell** targeting Wan 2.7 / LTX-2.3, MotionDirector, smart looping, auto-review, 720p-first generation, and final upscale workflow.
-- **Timeline** with drag-and-drop reordering, trimming, saved timeline data, and playable preview behavior.
-- **Basic chat editing** with placeholder parsing for edits, targeted regeneration, and global timeline changes.
-- **Exporter with metadata** so final videos carry provenance, character IDs, generation settings, review scores, and future reproducibility data.
+Existing capabilities to preserve and expand:
 
-The roadmap below assumes these MVP capabilities remain intact and are expanded incrementally rather than replaced.
+- **Weighted manual scoring loop** for starter images using Anatomy 40%, Physics 40%, and Style 20%, repeating until the average across 10 reviewed images reaches at least 80.
+- **General Physics / Anatomy Base LoRA** as a shared foundation for body plausibility, contact response, pressure/deformation cues, slime behavior, and the semi-realistic 3D anime style target.
+- **Character Library** with persistent reuse for singles, threesomes, and gangbang-scale scenes, with future regional ControlNets / LayerDiffuse support for separating characters in complex compositions.
+- **ComfyUI + Ostris pipeline shell** with planned Wan 2.7 / LTX-2.3 workflows, MotionDirector, smart looping, auto-review, 720p-first local generation, and final upscale to 1080p+.
+- **Timeline** with drag-and-drop reordering, trimming, saved project data, and playable preview.
+- **Basic chat editing** with placeholder parsing for natural-language edits and targeted regeneration.
+- **Exporter with metadata** so final files retain provenance, character IDs, seeds, model versions, scores, workflow IDs, and settings.
+- **RunPod hybrid/cloud direction** where heavy jobs can run remotely while the app keeps UI, scoring, timeline, and library state local.
+
+The roadmap below keeps the same professional structure for every phase:
+
+- phase name and estimated effort/time;
+- detailed goals and key features;
+- value added to the user / unique proposition;
+- technical approach and MVP integration;
+- concrete success criteria;
+- dependencies.
 
 ---
 
@@ -37,69 +57,108 @@ The roadmap below assumes these MVP capabilities remain intact and are expanded 
 
 ### Goals and key features
 
-- Convert the current Character Library into a durable production asset database.
+Phase 1 turns the current library into a durable production asset system. The library must become the source of truth for fixed male identity, partner identity, LoRA versions, race/material settings, training provenance, thumbnails, tags, and generation compatibility.
+
+Key goals:
+
 - Lock the fixed male receiver/POV identity permanently after approval.
-- Add explicit metadata separation between identity, anatomy/physics behavior, scene role, and style traits.
-- Add visual and metadata safeguards to prevent partner LoRAs from inheriting unrelated traits from previous partners.
-- Support reusable character loading for singles, threesomes, and larger grouped scenes.
+- Make partner characters reusable across solo partner scenes, threesomes, and larger group scenes.
+- Separate identity metadata from physics metadata so the General Physics Base LoRA can improve without causing partner visual contamination.
+- Create a stable versioned schema that later phases can use for the Adaptive Character Creator, AI Director, audio voices, scene scripts, and community packages.
 
 Key features:
 
-- Persistent SQLite-backed or JSON+index-backed character records.
-- Required character roles: `fixed_male`, `futa_partner`, `slime_partner`, `slime_futa_partner`, `supporting_partner`.
-- Character state machine: draft -> scoring -> approved -> training -> locked -> archived.
-- Fixed male identity lock with:
-  - IP-Adapter FaceID reference bundle.
-  - ControlNet pose/depth reference set.
-  - approved face/body thumbnails.
-  - immutable identity hash once locked.
-- Partner metadata schema for:
-  - visual descriptors.
-  - race/type.
-  - body proportions.
-  - futa-specific anatomy settings.
-  - slime material fields when applicable.
-  - behavior tags.
-  - physics emphasis tags.
-  - training dataset provenance.
-  - LoRA version history.
-- Character compatibility checks before scene generation.
-- Multi-character scene loading with region assignments and per-character influence weights.
+- Persistent character records using SQLite or a JSON+index hybrid.
+- Required character roles:
+  - `fixed_male_receiver`;
+  - `futa_partner`;
+  - `slime_partner`;
+  - `slime_futa_partner`;
+  - `fantasy_futa_partner`;
+  - `supporting_partner`;
+  - `group_scene_extra`.
+- Character lifecycle states:
+  - draft;
+  - previewing;
+  - manual_scoring;
+  - approved_for_training;
+  - training;
+  - trained;
+  - locked;
+  - deprecated;
+  - archived.
+- Fixed male lock bundle:
+  - approved FaceID reference set;
+  - ControlNet pose/depth/reference images;
+  - canonical thumbnails;
+  - body/face prompt fragments;
+  - immutable identity hash;
+  - locked generation defaults;
+  - explicit warning before any retraining/forking.
+- Partner LoRA record:
+  - LoRA path and version;
+  - base model compatibility;
+  - General Physics Base LoRA version used during training;
+  - trigger words;
+  - recommended LoRA strength;
+  - race/type/material metadata;
+  - visual identity fields;
+  - behavior/personality tags;
+  - anatomy and physics emphasis fields;
+  - training dataset hashes;
+  - scoring history;
+  - compatible workflow list.
+- Multi-character support:
+  - per-character region IDs;
+  - regional prompt fragments;
+  - ControlNet/LayerDiffuse assignment hooks;
+  - LoRA strength isolation;
+  - collision/overlap warnings;
+  - grouping tags for recurring scenes.
+- Search and management:
+  - thumbnails;
+  - favorites;
+  - tags;
+  - filters by role/race/type/material;
+  - LoRA version history;
+  - duplicate detection;
+  - missing-file repair.
 
 ### Value added / unique proposition
 
-Users get a true creator library instead of a folder of random LoRAs. The fixed male becomes a stable protagonist/receiver that creators can reuse across every project, while partners become modular production assets. This is essential for long-form adult series, repeatable character brands, and multi-scene continuity.
+The user gets a real creator library instead of a folder of disconnected model files. Futa-Vision's biggest long-term advantage depends on repeatable characters: a locked fixed male receiver, reusable partners, consistent LoRA stacks, and reliable multi-character staging. This phase makes future long-form production possible because scenes can be built from known assets rather than reinvented through prompts each time.
 
 ### Technical approach and MVP integration
 
-- Extend the existing Character Library rather than replacing it.
-- Store character records in a versioned metadata schema.
-- Introduce `identity_lock` fields for the fixed male and `visual_trait_boundaries` for partners.
-- Add migration scripts that convert existing MVP character records into the new schema.
-- Add validation before generation jobs:
-  - fixed male must have FaceID/control references.
-  - partner must have LoRA path and metadata.
-  - multi-character scenes must have unique region IDs.
-- Prepare integration hooks for regional ControlNets and LayerDiffuse:
-  - region masks.
-  - bounding boxes.
-  - per-character prompt fragments.
-  - per-character LoRA strengths.
+- Extend the existing Character Library module rather than replacing it.
+- Add `character_profile_version` and schema migration support.
+- Store identity-critical fixed male data separately from editable notes and tags.
+- Introduce `physics_inheritance` metadata showing which General Physics Base LoRA version a partner was trained against.
+- Add validation before generation:
+  - fixed male must be locked or intentionally run in draft mode;
+  - partner LoRA files must exist;
+  - base model compatibility must match selected workflow;
+  - LoRA stack must include the current or selected General Physics Base LoRA;
+  - group scenes must have distinct region assignments.
+- Add export/import-safe character manifests that strip local absolute paths unless explicitly included.
+- Preserve current MVP sidecar contracts so timeline and exporter modules continue to read character IDs.
 
 ### Success criteria
 
-- Existing MVP characters migrate without data loss.
-- A locked fixed male can be reused in at least 20 generated test images without major identity drift.
-- Two visually different partner LoRAs can be used back-to-back without skin/hair/eye trait leakage.
-- Multi-character scene manifests consistently assign character IDs, LoRA weights, and region masks.
-- Library search, tags, thumbnails, and one-click loading work reliably.
+- Existing MVP library entries migrate into the new schema without data loss.
+- A locked fixed male can be loaded into 20 image generations and 5 short clip generations with no major identity drift in manual review.
+- Two visually different partner LoRAs can be alternated in the same project without measurable skin/hair/eye trait leakage.
+- A three-character scene manifest correctly contains fixed male + two partners, unique region IDs, LoRA strengths, and workflow references.
+- Missing LoRA/model paths produce actionable repair messages rather than silent failures.
+- Library search returns correct results by role, race/type, slime/material profile, and tags.
 
 ### Dependencies
 
-- Current Character Library MVP.
-- IP-Adapter FaceID support in ComfyUI.
-- ControlNet pose/depth/reference workflows.
-- Stable metadata schema for generation and export sidecars.
+- Existing Character Library MVP.
+- IP-Adapter FaceID and ControlNet workflow support.
+- General Physics Base LoRA metadata.
+- Generation sidecar schema.
+- Exporter metadata contract.
 
 ---
 
@@ -109,60 +168,91 @@ Users get a true creator library instead of a folder of random LoRAs. The fixed 
 
 ### Goals and key features
 
-- Improve the General Physics / Anatomy Base LoRA into a reliable shared behavioral foundation.
-- Explicitly train and evaluate contact deformation, anatomy plausibility, rhythm, and body response.
-- Ensure partner LoRAs inherit general rules without inheriting visual identity.
+Phase 2 improves the General Physics / Anatomy Base LoRA from a basic shared foundation into a measurable, versioned, regression-tested behavior layer. The key principle is separation: the base LoRA should encode reusable physics/anatomy/style rules, not specific character identity.
+
+Key goals:
+
+- Improve pressure/contact behavior and body response across all partners.
+- Keep fixed male identity and partner visual identity out of the base LoRA.
+- Establish a repeatable benchmark so every future physics improvement can be measured.
+- Make the base LoRA safe to stack with per-character partner LoRAs.
 
 Key features:
 
-- Curated synthetic and approved-output dataset builder for general anatomy/physics.
-- Caption taxonomy for:
-  - pressure contact.
-  - soft tissue deformation.
-  - skin indentation.
-  - stretch response.
-  - thrust rhythm and direction.
-  - body weight transfer.
-  - slime viscosity, flow, and cohesion.
-  - semi-realistic 3D anime lighting/material style.
-- Negative caption sanitization to remove character-specific visual traits.
-- Physics validation set independent of partner visuals.
-- Weighted regression benchmarks for Anatomy 40%, Physics 40%, Style 20%.
-- Base LoRA versioning with rollback.
+- Curated dataset builder for physics/anatomy examples:
+  - generic semi-realistic 3D anime bodies;
+  - neutral contact studies;
+  - soft tissue response examples;
+  - generic futa anatomy/proportion studies;
+  - slime material behavior examples;
+  - negative/failure examples for review and prompt refinement.
+- Caption taxonomy:
+  - contact alignment;
+  - pressure response;
+  - indentation/deformation;
+  - stretch response;
+  - body weight transfer;
+  - thrust/rhythm plausibility;
+  - anatomy stability;
+  - slime viscosity and cohesion;
+  - semi-realistic render style;
+  - lighting/material consistency.
+- Caption sanitizer:
+  - removes unique character names;
+  - removes partner-specific hair/eye/skin traits unless marked generic;
+  - blocks fixed male face/body identity references;
+  - flags race-specific traits that should belong to a race adapter instead of the base LoRA.
+- Versioned base LoRA registry:
+  - semantic version;
+  - training dataset hash;
+  - training config;
+  - validation scores;
+  - rollback path;
+  - compatible base models.
+- Regression benchmark using the same weighting philosophy as MVP:
+  - Anatomy 40%;
+  - Physics 40%;
+  - Style 20%.
+- Local and cloud training profiles:
+  - RTX 4070 8 GB conservative profile;
+  - RunPod quality profile;
+  - dry-run config validation.
 
 ### Value added / unique proposition
 
-Most creator tools rely on prompts and hope the model understands contact. Futa-Vision should own a specialized shared physics layer that makes every future character better. This creates compounding quality: each approved physics lesson improves the whole product without forcing users to retrain every partner from scratch.
+Most local AI video workflows depend on prompts and luck for contact quality. Futa-Vision should own a reusable behavioral base that makes every future character and scene better. The General Physics Base LoRA becomes a compounding asset: approved examples, guided feedback, and regression-tested improvements all increase the baseline quality of the product.
 
 ### Technical approach and MVP integration
 
-- Build directly on the MVP General Physics Base LoRA path.
-- Keep character-specific data out of the base dataset.
-- Add training manifests that distinguish:
-  - reusable physics concepts.
-  - generic anatomy concepts.
-  - style/material concepts.
-  - forbidden identity-specific traits.
-- Add preflight checks before training:
-  - no unique character names.
-  - no hair/eye/skin identity captions unless intentionally generic.
-  - no fixed male face references in base data.
-- Use low-rank training profiles for RTX 4070 local runs and larger RunPod profiles for cloud runs.
-- Add auto-review outputs to base LoRA regression dashboards.
+- Build on the existing General Physics Base LoRA training path.
+- Add dataset manifests with strict categories: `general_physics`, `general_anatomy`, `style_rendering`, `slime_material`, `negative_failure`, and `excluded_identity`.
+- Add a preflight report before every training run:
+  - dataset size;
+  - duplicate count;
+  - caption warnings;
+  - identity leakage warnings;
+  - estimated VRAM/time;
+  - local vs RunPod recommendation.
+- Integrate with auto-review so generated clips can become candidate examples only after user approval.
+- Store base LoRA choice in every generation sidecar.
+- Add a comparison tool to evaluate Base LoRA vN vs vN+1 on the same seeds, characters, and prompts.
 
 ### Success criteria
 
-- Base LoRA v2 improves average physics score by at least 10% over MVP baseline on a held-out validation set.
-- Base LoRA does not measurably bias partner skin, hair, eye, or outfit traits.
-- Local low-VRAM training profile completes without OOM on RTX 4070 8 GB using reduced batch/gradient settings.
-- RunPod profile produces higher-quality checkpoints from the same dataset with no schema changes.
+- Base LoRA v2 improves held-out physics scores by at least 10% over the MVP base on the benchmark set.
+- Anatomy score does not regress by more than 3% while improving physics.
+- Style score remains within target range for semi-realistic 3D anime output.
+- Partner visual leakage test shows no meaningful transfer of skin/hair/eye/outfit traits from the base dataset.
+- Local training profile runs on RTX 4070 8 GB without OOM using documented settings.
+- RunPod profile can train a higher-quality checkpoint from the same manifest without changing metadata schema.
 
 ### Dependencies
 
-- Ostris training orchestration.
-- Dataset caption sanitizer.
-- Character Library metadata boundaries.
-- Auto-review scoring outputs.
+- Ostris training orchestrator.
+- Dataset/caption sanitizer.
+- Character Library schema.
+- Auto-review scoring.
+- Hardware checker and RunPod hybrid path.
 
 ---
 
@@ -172,69 +262,109 @@ Most creator tools rely on prompts and hope the model understands contact. Futa-
 
 ### Goals and key features
 
-- Move from placeholder pipeline shell to reliable short-clip generation and review.
-- Optimize Wan 2.7 / LTX-2.3 workflows for 720p local generation.
-- Strengthen auto-review for contact, anatomy, temporal coherence, and style.
-- Make smart looping useful for long-form assembly.
+Phase 3 converts the placeholder video shell into a dependable short-clip generation and review system. The focus is not yet one-shot 15-minute generation. The focus is approved 5-10 second clips that can be scored, extended, looped, replaced, and assembled.
+
+Key goals:
+
+- Make Wan 2.7 and LTX-2.3 workflows production-ready inside ComfyUI.
+- Preserve the RTX 4070 8 GB default of 720p generation plus later upscale.
+- Add auto-review that mirrors manual Anatomy/Physics/Style scoring.
+- Make smart looping and extension reliable enough for long-form timelines.
 
 Key features:
 
-- Production ComfyUI workflow registry for:
-  - Wan 2.7 physics-focused generation.
-  - LTX-2.3 speed-focused generation.
-  - MotionDirector motion control.
-  - Wan-video-extender or equivalent extension.
+- Workflow registry for:
+  - Wan 2.7 physics-focused generation;
+  - LTX-2.3 speed/draft generation;
+  - MotionDirector motion guidance;
+  - Wan-video-extender or equivalent extension;
+  - ControlNet pose/depth/reference guidance;
+  - IP-Adapter FaceID fixed male stabilization;
   - SeedVR 2.5 / RTX Video SR / Nomos2 upscale profiles.
 - Hardware-aware generation presets:
-  - RTX 4070 8 GB local-low-vram.
-  - RTX 4090/5090 local-high-vram.
-  - RunPod cloud-fast.
-  - RunPod cloud-quality.
-- Clip auto-review scoring:
-  - contact plausibility.
-  - anatomy stability.
-  - character identity stability.
-  - rhythm/loop continuity.
-  - slime material behavior.
-  - lighting/style consistency.
-- Reject/regenerate queue for clips below score threshold.
-- Smart loop detector for low-motion windows and repeatable rhythm cycles.
-- Side-by-side review UI for candidate clips.
+  - `local_low_vram_8gb` for RTX 4070 and similar cards;
+  - `local_standard_12gb`;
+  - `local_high_vram_24gb`;
+  - `runpod_fast`;
+  - `runpod_quality`.
+- Clip auto-review:
+  - anatomy stability;
+  - fixed male identity consistency;
+  - partner identity consistency;
+  - contact plausibility;
+  - pressure/deformation cues;
+  - rhythm and motion continuity;
+  - slime viscosity/cohesion when relevant;
+  - lighting/style consistency;
+  - temporal flicker;
+  - loop seam quality.
+- Review UI:
+  - candidate grid;
+  - frame strip preview;
+  - score breakdown;
+  - approve/reject buttons;
+  - regenerate with same seed family;
+  - regenerate with altered physics/style/motion settings;
+  - note-taking for future LLM/training sessions.
+- Smart loop and extension:
+  - low-motion window detection;
+  - rhythm cycle detection;
+  - overlap blending;
+  - extension score;
+  - seam warning;
+  - maximum extension budget per clip.
 
 ### Value added / unique proposition
 
-The product becomes a usable video creator rather than an image trainer. Users can produce short approved clips with repeatable settings, compare candidates, reject weak output, and extend strong clips into longer segments while keeping timeline metadata intact.
+This phase makes Futa-Vision usable as a video tool. Users can generate multiple short candidates, approve the best ones, reject weak ones, and build longer sequences from clips that have actually passed quality gates. It also creates the data foundation for chat editing, AI Director, audio alignment, and guided self-improvement.
 
 ### Technical approach and MVP integration
 
-- Replace deterministic placeholder `.mp4` jobs with ComfyUI job dispatch while preserving the existing JSON sidecar contract.
-- Keep local file layout unchanged so timeline, chat editing, and exporter continue to work.
-- Add workflow compatibility checks at startup.
-- Cache model and LoRA load plans to reduce repeated workflow overhead.
-- Use tiled/low-memory attention, quantized models, and conservative frame counts by default on 8 GB VRAM.
-- Store every clip with:
-  - workflow ID.
-  - model version.
-  - character IDs.
-  - LoRA strengths.
-  - seed.
-  - review scores.
-  - loop/extension metadata.
+- Replace deterministic placeholder videos with real ComfyUI job dispatch while preserving existing `VideoJobResult` JSON sidecars.
+- Keep all current output folders and timeline references stable.
+- Add workflow validation on startup:
+  - required nodes installed;
+  - model files found;
+  - LoRA files found;
+  - VRAM preset compatible;
+  - sample workflow can be queued.
+- Use conservative local defaults:
+  - 720p target;
+  - short frame counts;
+  - quantized/FP8/GGUF options where supported;
+  - tiled/low-memory attention;
+  - disk cache;
+  - automatic fallback to lower preview resolution after OOM.
+- Every clip sidecar should include:
+  - project ID;
+  - character IDs;
+  - fixed male lock hash;
+  - General Physics Base LoRA version;
+  - partner LoRA versions;
+  - workflow ID;
+  - seed;
+  - prompt fragments;
+  - review score breakdown;
+  - extension/loop metadata;
+  - local vs RunPod execution metadata.
 
 ### Success criteria
 
-- Generate 5-10 second 720p clips locally on RTX 4070 8 GB without OOM under default settings.
-- At least 80% of approved clips preserve fixed male identity sufficiently for continuity.
-- Smart-loop extension can extend a 10-second approved clip to 20+ seconds without obvious seam in test cases.
-- Rejected clips are automatically queued for targeted regeneration with preserved character and scene settings.
+- Generate at least 5 consecutive 5-10 second 720p clips locally on RTX 4070 8 GB using the default preset without OOM.
+- Auto-review produces Anatomy/Physics/Style breakdowns for every generated clip.
+- At least 80% of manually approved clips preserve the locked fixed male identity in review tests.
+- Smart-loop extension can extend a 10-second approved clip to at least 20 seconds with no obvious seam in a majority of benchmark cases.
+- A rejected clip can be regenerated with the same characters/settings while preserving provenance.
+- RunPod and local outputs use the same sidecar format.
 
 ### Dependencies
 
-- ComfyUI installation and workflow registry.
-- Model availability.
+- ComfyUI workflow registry.
+- Model and node installation.
 - Character Library stable IDs.
-- Hardware detector and low-VRAM settings.
-- Exporter sidecar contract.
+- General Physics Base LoRA versioning.
+- Hardware checker.
+- Exporter sidecar format.
 
 ---
 
@@ -244,68 +374,95 @@ The product becomes a usable video creator rather than an image trainer. Users c
 
 ### Goals and key features
 
-- Upgrade the MVP timeline and chat-editing features into a reliable creator editing surface.
-- Make RunPod hybrid mode first-class.
-- Improve final export confidence and reproducibility.
+Phase 4 turns generated clips into a practical editing workflow. The user should be able to assemble, revise, extend, and export a project without manually editing JSON or moving files.
+
+Key goals:
+
+- Make the timeline reliable for long-form adult videos.
+- Upgrade chat editing from placeholder parsing to structured targeted regeneration.
+- Make RunPod hybrid mode transparent and recoverable.
+- Improve export quality, metadata, and reproducibility.
 
 Key features:
 
 - Timeline upgrades:
-  - drag-and-drop reorder.
-  - trim handles.
-  - playable preview.
-  - clip grouping.
-  - transition slots.
-  - loop boundaries.
-  - approved/rejected badges.
+  - drag-and-drop reorder;
+  - trim handles;
+  - playable preview;
+  - timeline zoom;
+  - clip grouping;
+  - transition slots;
+  - approved/rejected/needs-review badges;
+  - loop boundary indicators;
+  - clip provenance panel;
+  - project autosave.
 - Chat editing upgrades:
-  - structured intent preview before execution.
-  - targeted regeneration by clip, range, character, motion, style, lighting, or transition.
-  - edit history and undo.
-  - prompt diff display.
+  - parse natural edits into structured intent;
+  - show intent preview before execution;
+  - target one clip, selected range, transition, character, lighting, motion, or full timeline;
+  - regenerate only affected clips;
+  - preserve untouched clips;
+  - show prompt/setting diffs;
+  - undo edit plans.
 - RunPod hybrid:
-  - one-click pod launch.
-  - workflow bundle upload.
-  - asset manifest upload.
-  - remote execution for training/generation/extension/upscale.
-  - automatic download into local library/timeline.
-  - cost/time estimate before dispatch.
+  - one-click pod launch;
+  - credential validation;
+  - workflow and asset bundle upload;
+  - task-level dispatch for training/generation/extension/upscale;
+  - job status and logs;
+  - automatic download into local timeline/library;
+  - cost/time estimate;
+  - interrupted job recovery;
+  - cleanup remote temporary assets.
 - Export polish:
-  - metadata sidecars.
-  - embedded project manifest.
-  - final upscale selection.
-  - frame-rate and codec presets.
-  - reproducibility bundle.
+  - final 1080p+ upscale after timeline approval;
+  - codec presets;
+  - frame-rate normalization;
+  - audio placeholder compatibility for Phase 6;
+  - embedded or adjacent metadata manifest;
+  - project archive option;
+  - export preflight warnings.
 
 ### Value added / unique proposition
 
-Creators can direct and revise a project like a real editing session. Heavy work can move to cloud without sacrificing local control or library organization. The product becomes a long-form workflow instead of a generation script.
+The product becomes a director tool instead of a generator queue. Users can keep creative control locally, edit by intent, offload heavy tasks only when needed, and produce a final video with traceable settings and assets.
 
 ### Technical approach and MVP integration
 
-- Keep existing timeline and regeneration modules as the backbone.
-- Add a formal edit intent schema and validation layer.
-- Use the same generation sidecar format for local and cloud jobs.
-- Add cloud status polling and retry-safe downloads.
+- Keep the existing timeline, chat parser, regeneration engine, cloud manager, and exporter as the foundation.
+- Formalize `edit_intent.schema.json`:
+  - target scope;
+  - target clips;
+  - requested change;
+  - protected constraints;
+  - regeneration strategy;
+  - expected review category improvements.
+- Preserve sidecar compatibility across local and cloud outputs.
 - Add export preflight checks:
-  - missing clips.
-  - mismatched resolution/frame rate.
-  - low review score warnings.
-  - missing LoRA/model provenance.
+  - missing files;
+  - mismatched resolution/FPS;
+  - low review scores;
+  - missing model/LoRA provenance;
+  - timeline gaps;
+  - cloud job not downloaded;
+  - unsupported codec.
+- Add cloud audit logs so sensitive asset movement is explicit.
 
 ### Success criteria
 
-- User can create a 3-5 minute timeline from approved clips, edit one clip via chat, and export without breaking untouched clips.
-- RunPod job results return to the correct timeline slot with intact metadata.
-- Exported final video includes a complete reproducibility sidecar.
-- Hybrid mode can recover gracefully from interrupted cloud jobs.
+- User can assemble a 3-5 minute timeline, regenerate the third clip via chat, and export while untouched clips remain unchanged.
+- A RunPod generation job returns to the correct timeline slot with intact sidecar metadata.
+- Export preflight catches missing clips and low-score segments before final render.
+- Final export includes reproducibility metadata listing characters, LoRAs, base models, workflows, seeds, and review scores.
+- Interrupted cloud jobs can be resumed, retried, or safely abandoned without corrupting the project.
 
 ### Dependencies
 
-- Existing timeline/chat/exporter MVP.
-- RunPod credentials and remote worker template.
-- Stable workflow manifests.
-- Model and LoRA path normalization.
+- Phase 3 clip sidecars.
+- Timeline MVP.
+- Chat parser/regeneration modules.
+- RunPod API integration.
+- Exporter metadata support.
 
 ---
 
@@ -315,314 +472,673 @@ Creators can direct and revise a project like a real editing session. Heavy work
 
 ### Goals and key features
 
-Deliver a one-click setup experience that turns Futa-Vision from a developer project into a creator-friendly desktop product. The installer should detect existing tools, install missing dependencies, create a consistent folder structure, and guide users through hardware-safe defaults.
+Phase 5 removes the biggest adoption barrier: setup complexity. Futa-Vision should install like a creator application, not like a collection of AI research repositories. The installer must detect existing tools, install missing dependencies, set safe defaults, and confirm that the user's hardware can run the intended workflow.
 
-Must-include installer capabilities:
+Key goals:
 
-- Detect existing installs of:
-  - Futa-Vision.
-  - Ostris AI Toolkit.
-  - ComfyUI.
-  - Pinokio-managed environments.
-  - Python/CUDA/Torch compatibility.
-  - installed models and LoRAs.
-- Install **Ostris portable** with a known-good environment.
-- Install **ComfyUI** plus required extensions, including:
-  - ADMotionDirector.
-  - IPAdapter_plus.
-  - Wan-video-extender.
-  - LTX nodes.
-  - ControlNet nodes.
-  - LayerDiffuse or equivalent regional/layer tools.
-  - upscale/video interpolation nodes selected for the supported workflows.
-- Install or guide download for base models:
-  - Z-Image Turbo NSFW.
-  - Pony V7.
-  - Wan 2.7 video models.
-  - LTX-2.3 video models.
-  - IP-Adapter FaceID weights.
-  - ControlNet pose/depth/reference weights.
-  - upscalers such as SeedVR 2.5 / RTX Video SR / Nomos2 where locally supported.
+- Provide a one-click Windows-first installer with clear first-run guidance.
+- Detect and reuse existing compatible ComfyUI/Ostris/Pinokio installs.
+- Install a known-good portable stack when no compatible install exists.
+- Configure RTX 4070 8 GB users for 720p local-low-VRAM generation by default.
+- Make RunPod hybrid setup easy for users who need cloud acceleration.
+
+Must-have installer capabilities:
+
+- Detect existing installs:
+  - Futa-Vision;
+  - Ostris AI Toolkit;
+  - ComfyUI;
+  - Pinokio-managed environments;
+  - Python versions;
+  - CUDA/NVIDIA driver/Torch compatibility;
+  - model folders;
+  - LoRA folders;
+  - existing outputs/projects.
+- Install **Ostris portable** with pinned dependencies and a tested low-VRAM profile.
+- Install **ComfyUI** plus required extensions:
+  - ADMotionDirector;
+  - IPAdapter_plus;
+  - Wan-video-extender;
+  - LTX nodes;
+  - ControlNet nodes;
+  - LayerDiffuse or equivalent regional/layer tools;
+  - video interpolation nodes;
+  - upscale nodes;
+  - workflow utility nodes required by bundled graphs.
+- Install or guide download for required and recommended models:
+  - Z-Image Turbo NSFW;
+  - Pony V7;
+  - Wan 2.7 video models;
+  - LTX-2.3 video models;
+  - IP-Adapter FaceID weights;
+  - ControlNet pose/depth/reference weights;
+  - SeedVR 2.5 / RTX Video SR / Nomos2 or supported alternatives;
+  - default negative prompt/style helper embeddings where compatible.
 - Install bundled project assets:
-  - General Physics Base LoRA.
-  - sample partner characters.
-  - sample fixed-male placeholder/reference workflow.
-  - demo workflows for generation, review, extension, and upscale.
-- Create proper folder structure:
-  - `/library/male`.
-  - `/library/partners`.
-  - `/library/indexes`.
-  - `/general_physics_lora`.
-  - `/datasets/male`.
-  - `/datasets/partners`.
-  - `/outputs/images`.
-  - `/outputs/clips`.
-  - `/outputs/extended_clips`.
-  - `/outputs/final_videos`.
-  - `/workflows/comfy`.
-  - `/workflows/ostris`.
-  - `/logs`.
-  - `/cache`.
+  - current General Physics Base LoRA;
+  - sample partner characters;
+  - sample fixed male placeholder/reference workflow;
+  - demo ComfyUI workflows;
+  - demo Ostris configs;
+  - validation prompts;
+  - sample timeline project.
+- Create folder structure:
+  - `/library/male`;
+  - `/library/partners`;
+  - `/library/race_packs`;
+  - `/library/material_profiles`;
+  - `/library/voices`;
+  - `/library/indexes`;
+  - `/general_physics_lora`;
+  - `/datasets/male`;
+  - `/datasets/partners`;
+  - `/datasets/general_physics`;
+  - `/outputs/images`;
+  - `/outputs/clips`;
+  - `/outputs/extended_clips`;
+  - `/outputs/audio`;
+  - `/outputs/final_videos`;
+  - `/workflows/comfy`;
+  - `/workflows/ostris`;
+  - `/projects`;
+  - `/logs`;
+  - `/cache`;
   - `/backups`.
 - Create desktop shortcut and start menu entry where supported.
 - Add Pinokio support:
-  - Pinokio app recipe.
-  - dependency manifest.
-  - update scripts.
-  - launch actions for Futa-Vision, ComfyUI, and Ostris.
+  - Pinokio app recipe;
+  - dependency manifest;
+  - install/update scripts;
+  - launch actions for Futa-Vision, ComfyUI, Ostris, and later Ollama;
+  - health-check action;
+  - repair action.
 - First-run wizard:
-  - adult-content acknowledgement.
-  - hardware check.
-  - VRAM classification.
-  - local/cloud recommendation.
-  - model path validation.
-  - RunPod credential setup.
-  - storage location selection.
-  - sample generation test.
+  - adult-content acknowledgement;
+  - local privacy explanation;
+  - storage location selection;
+  - hardware check;
+  - VRAM classification;
+  - recommended mode selection;
+  - model path validation;
+  - ComfyUI/Ostris launch test;
+  - RunPod credential setup;
+  - sample image generation test;
+  - sample clip generation test where hardware allows;
+  - diagnostic bundle creation if setup fails.
 
 ### Value added / unique proposition
 
-Adult AI video tools often fail at installation. A credible one-click installer is a major differentiator because creators want to direct content, not debug Python, CUDA, Git, or model folders. This phase dramatically expands the addressable audience and reduces support burden.
+Adult local AI video workflows often fail before the user ever generates a frame. A robust installer is a major product differentiator because it expands Futa-Vision from a developer-only tool into something creators can realistically use. It also reduces support burden by standardizing paths, workflows, versions, diagnostics, and hardware presets.
 
 ### Technical approach and MVP integration
 
-- Build a cross-platform installer strategy with staged implementation:
-  1. Windows-first portable installer.
-  2. Pinokio recipe for users already in that ecosystem.
-  3. Later macOS/Linux support where hardware support is practical.
-- Use manifest-driven installs:
-  - `install_manifest.json` for required tools/extensions/models.
-  - checksum validation.
-  - version pinning.
-  - mirror URLs where legally/distribution-appropriate.
-  - user-provided model path fallback when redistribution is not allowed.
-- Use the existing hardware checker for first-run recommendations.
-- Add environment repair commands:
-  - verify paths.
-  - repair ComfyUI extensions.
-  - rebuild Python venv.
-  - relink model folders.
-  - re-run sample workflow.
-- Avoid moving existing user models unless explicitly requested; prefer symlink/link registry.
-- Add installer logs and diagnostic export for support.
+- Use a manifest-driven installer:
+  - `install_manifest.json` for tools, nodes, models, checksums, and versions;
+  - `workflow_manifest.json` for workflow compatibility;
+  - `hardware_profiles.json` for recommended settings;
+  - `repair_manifest.json` for common fixes.
+- Windows-first portable distribution, followed by Pinokio support, then broader platform evaluation.
+- Reuse the existing hardware checker and configuration system.
+- Prefer linking/symlinking existing model folders instead of copying large files.
+- Respect model licensing/distribution constraints by supporting user-provided paths and guided downloads where redistribution is not allowed.
+- Store installer logs in `/logs/installer` and expose a one-click diagnostic export.
+- Add repair commands:
+  - verify install;
+  - reinstall missing ComfyUI nodes;
+  - rebuild Python environment;
+  - relink model folders;
+  - verify Torch/CUDA;
+  - rerun sample workflow;
+  - reset app config without deleting user projects.
 
 ### Success criteria
 
-- Fresh Windows machine with supported NVIDIA drivers can reach the Futa-Vision home screen from installer in one guided flow.
-- Existing ComfyUI/Ostris installs are detected and reused when compatible.
-- First-run wizard correctly recommends `local_low_vram` for RTX 4070 8 GB.
-- Required extensions are installed and version-validated.
-- Sample workflow runs or produces a clear actionable diagnostic.
-- Pinokio recipe can install, update, and launch the app without manual file edits.
+- A fresh supported Windows machine can install and reach the Futa-Vision home screen in one guided flow.
+- RTX 4070 8 GB systems are correctly classified as `local_low_vram_8gb` and default to 720p + final upscale.
+- Existing compatible ComfyUI/Ostris installs are detected and reused without overwriting user data.
+- Required ComfyUI extensions are installed and version-validated.
+- First-run sample generation either succeeds or produces a clear diagnostic with the failing dependency named.
+- Pinokio recipe can install, update, verify, and launch the app without manual file edits.
+- RunPod credential setup can validate the API key and show an estimated cloud profile.
 
 ### Dependencies
 
-- Stable workflow registry from Phase 3.
+- Stable workflow registry.
 - Hardware checker.
 - Model licensing/distribution decisions.
+- Configuration schema.
 - Pinokio recipe maintenance.
-- Clear folder layout and config schema.
+- Known-good ComfyUI/Ostris versions.
 
 ---
 
 ## Phase 5.5 — Adaptive Character Creator
 
-**Estimated effort/time:** 6-8 weeks.
+**Estimated effort/time:** 7-10 weeks.
 
 ### Goals and key features
 
-Create one unified RPG-style character creator with adaptive fields (**Option B**) that supports both quick creation and deep customization. The creator should feed directly into the existing weighted scoring loop, LoRA training path, and Character Library.
+Phase 5.5 is a major product feature: a **unified adaptive RPG-style character creator** for futa, slime, slime-futa, and fantasy-race partners. It should feel like one intelligent interface, not a collection of separate forms. The creator dynamically changes available fields, sliders, presets, prompt fragments, preview workflows, and metadata requirements based on the selected race/type, body archetype, material type, and user-selected complexity level.
 
-Core design:
+The creator must support two equally important user modes:
 
-- One creator flow, not separate tools for every character type.
-- Early race/type selection changes available fields dynamically.
-- Quick/basic mode for users who only want a few inputs.
-- Advanced mode for detailed creators who want fine control.
-- Structured JSON metadata saved for later editing, regeneration, and LoRA retraining.
+1. **Quick/basic mode** for fast creation:
+   - choose race/type;
+   - choose body archetype;
+   - choose style preset;
+   - choose futa/slime anatomy category where relevant;
+   - choose personality/behavior tags;
+   - generate starter images.
+2. **Deep customization mode** for fine control:
+   - many sections;
+   - sliders;
+   - toggles;
+   - race-specific options;
+   - material controls;
+   - anatomy/physics emphasis;
+   - prompt preview;
+   - LoRA training metadata preview;
+   - locked-field randomization.
 
-Supported race/type selection:
+Core design principles:
 
-- Humanoid.
-- Demon.
-- Elf.
-- Orc.
-- Animal hybrids:
-  - cat.
-  - fox.
-  - wolf.
-  - dragon.
-  - other expandable hybrid types.
-- Slime variant.
-- Slime futa variant.
+- One creator flow for every partner type.
+- Early race/type selection drives adaptive fields.
+- Users can switch between basic and advanced views without losing data.
+- Every field writes to structured JSON metadata, not only a text prompt.
+- The output flows directly into the existing MVP loop: starter image generation -> weighted 40/40/20 scoring -> approval threshold -> lightweight per-character LoRA training -> Character Library.
+- Character-specific visual identity stays in the partner LoRA.
+- General anatomy/physics behavior remains inherited from the General Physics Base LoRA.
+- Fixed male identity is never edited here; the creator is for new partners or partner forks.
 
-Deep customization sections:
+### Supported race/type system
 
-1. **Body proportions**
-   - height.
-   - body build.
-   - shoulder/hip ratio.
-   - muscle definition.
-   - body softness.
-   - chest size/shape.
-   - waist/abdomen definition.
-   - limb proportions.
-   - hand/foot scale.
-2. **Face**
-   - face shape.
-   - jaw/chin softness.
-   - eye shape.
-   - eye color.
-   - brows.
-   - nose.
-   - lips.
-   - expression defaults.
-   - makeup or markings.
-3. **Hair**
-   - length.
-   - style.
-   - color.
-   - highlights.
-   - bangs/fringe.
-   - tied/loose variants.
-   - physics emphasis for hair motion.
-4. **Futa-specific anatomy**
-   - overall size category.
-   - shape.
-   - proportion relative to body.
-   - sensitivity/detail level.
-   - movement emphasis.
-   - contact/pressure behavior priority.
-   - visual consistency constraints.
-5. **Skin/material**
-   - skin tone.
-   - subsurface scattering intensity.
-   - gloss level.
-   - freckles/scars/markings.
-   - demon/orc/elf fantasy skin variants.
-   - slime translucency or material response when applicable.
-6. **Outfit**
-   - nude/adult scene readiness toggle where legally appropriate.
-   - costume category.
-   - accessories.
-   - fabric/armor/material.
-   - removable layers.
-   - continuity locks.
-7. **Personality/behavior tags**
-   - confident.
-   - gentle.
-   - dominant.
-   - playful.
-   - shy.
-   - teasing.
-   - affectionate.
-   - intense.
-   - scene-safe boundaries and creator notes.
-8. **Physics emphasis**
-   - skin pressure/deformation priority.
-   - body recoil.
-   - rhythm stability.
-   - body weight transfer.
-   - slime flow.
-   - jiggle/secondary motion.
-   - soft lighting and render polish.
+The creator should encourage a wide variety of adult fantasy partners rather than limiting users to a few archetypes. Race/type selection should be extensible through JSON race packs.
 
-Slime-specific fields:
+Recommended built-in categories:
 
-- viscosity.
-- translucency.
-- bubble density.
-- internal glow.
-- flow intensity.
-- shape stability.
-- color/tint.
-- surface gloss.
-- cohesion/stretchiness.
-- dripping behavior.
-- reformation speed.
-- humanoid-to-fluid transition strength.
-- slime futa anatomy behavior and shape retention.
+- **Humanoid / humanlike**
+  - athletic;
+  - soft-body;
+  - tall elegant;
+  - muscular;
+  - petite adult;
+  - mature adult;
+  - stylized 3D anime model.
+- **Demon / devil / succubus**
+  - horns;
+  - tails;
+  - wings;
+  - skin gradients;
+  - glowing markings;
+  - dominant or seductive behavior presets;
+  - high-contrast lighting presets.
+- **Elf / dark elf / high elf**
+  - ear shape and length;
+  - elegant proportions;
+  - refined facial presets;
+  - fantasy skin tones;
+  - jewelry/outfit accents.
+- **Orc / oni / ogre-inspired**
+  - muscular/heavy body shapes;
+  - tusks/fangs;
+  - strong pressure/weight-transfer physics emphasis;
+  - fantasy skin colors;
+  - large-body motion presets.
+- **Angel / celestial**
+  - wings;
+  - halo/glow accents;
+  - soft luminous materials;
+  - gentle/commanding personality variants;
+  - feather motion considerations.
+- **Vampire / gothic**
+  - pale or stylized skin;
+  - fangs;
+  - eye glow;
+  - gothic outfits;
+  - nocturnal lighting presets.
+- **Kitsune / fox hybrid**
+  - ears;
+  - one or multiple tails;
+  - tail fur color;
+  - playful/teasing behavior tags;
+  - tail secondary-motion emphasis.
+- **Cat hybrid / neko**
+  - ears;
+  - tail;
+  - paw/marking options;
+  - agile body presets;
+  - playful expression presets.
+- **Wolf hybrid / werewolf / canine hybrid**
+  - ears;
+  - tail;
+  - fur accents;
+  - stronger build options;
+  - intensity and stamina behavior tags.
+- **Dragonkin / draconic hybrid**
+  - horns;
+  - scales;
+  - tail;
+  - wings;
+  - claws;
+  - scale color/material;
+  - heavy/serpentine motion emphasis.
+- **Lizard/reptile hybrid**
+  - scale patterns;
+  - tail shape;
+  - gloss level;
+  - eye shapes;
+  - texture continuity locks.
+- **Bunny/deer/goat/horse hybrid**
+  - ears/horns/antlers;
+  - tail variants;
+  - leg/hoof stylization limits;
+  - soft fantasy presets.
+- **Harpy / avian hybrid**
+  - wings;
+  - feather accents;
+  - talon stylization limits;
+  - feather color/material;
+  - wing collision/visibility controls.
+- **Alien / cosmic / synthetic humanoid**
+  - unusual skin/material colors;
+  - markings;
+  - glowing accents;
+  - cybernetic details;
+  - nonhuman but readable anatomy constraints.
+- **Robot / android / biomechanical**
+  - synthetic skin;
+  - panel lines;
+  - emissive accents;
+  - glossy material;
+  - mechanical outfit/accessory constraints.
+- **Slime**
+  - fully slime partner;
+  - humanoid slime;
+  - slime futa;
+  - partial slime overlays;
+  - translucent material profiles.
+- **Hybrid/fusion mode**
+  - combine one primary race with one secondary trait pack;
+  - e.g. demon kitsune, slime elf, vampire dragonkin;
+  - conflict warnings for traits likely to destabilize generation.
 
-Creator features:
+### Deep customization sections
 
-- Strong futa-on-male focused presets:
-  - athletic humanoid futa.
-  - soft-body elf futa.
-  - demon futa with strong pressure/contact emphasis.
-  - orc futa with large-body dynamics.
-  - cat/fox/wolf hybrid futa.
-  - dragon hybrid futa.
-  - translucent slime futa.
-  - high-viscosity slime-on-male partner.
-- Start from base image:
-  - image analysis.
-  - automatic field extraction.
-  - editable generated profile.
-  - identity-safe metadata.
-- Live low-res preview:
-  - fast 512px or lower preview.
-  - draft mode without training.
-  - seed locking.
-  - side-by-side variants.
-- Randomize:
-  - full random.
-  - race-aware random.
-  - locked-field randomization.
-  - mutation strength slider.
-- Structured rich prompt generation:
-  - base prompt.
-  - character prompt.
-  - anatomy/physics prompt.
-  - style prompt.
-  - negative prompt.
-  - LoRA training caption hints.
-- Direct pipeline handoff:
-  - generate 10-20 starter images.
-  - send into Anatomy/Physics/Style scoring loop.
-  - repeat until rolling average >=80 across 10 images.
-  - train lightweight per-character LoRA.
-  - save to Character Library with editable JSON metadata.
+The advanced creator should expose detailed fields while keeping the UI organized and understandable.
+
+#### 1. Identity and concept
+
+- character name;
+- creator notes;
+- role/tagline;
+- race/type;
+- secondary trait pack;
+- age category restricted to adult characters;
+- visual archetype;
+- prompt trigger words;
+- intended scene roles;
+- default LoRA strength target.
+
+#### 2. Body proportions
+
+- height category;
+- body build;
+- muscle definition;
+- softness;
+- shoulder width;
+- hip width;
+- waist shape;
+- chest size/shape;
+- abdomen definition;
+- limb proportions;
+- hand/foot scale;
+- posture tendency;
+- body asymmetry/marks;
+- physics response emphasis:
+  - recoil;
+  - soft-tissue motion;
+  - weight transfer;
+  - contact indentation visibility.
+
+#### 3. Face and expression
+
+- face shape;
+- jaw/chin softness;
+- cheek structure;
+- eye shape;
+- eye color;
+- pupil style;
+- brows;
+- nose;
+- lips;
+- fangs/tusks if applicable;
+- default expression;
+- expression intensity;
+- makeup;
+- markings;
+- identity lock hints for LoRA training.
+
+#### 4. Hair and head features
+
+- hair length;
+- hair style;
+- primary color;
+- secondary color/highlights;
+- bangs/fringe;
+- tied/loose variants;
+- horns;
+- ears;
+- antlers;
+- halo;
+- head fins/crests;
+- hair physics emphasis;
+- feature consistency locks.
+
+#### 5. Futa-specific anatomy and motion controls
+
+These controls should remain professional UI controls, not erotic prose. They define visual consistency, proportions, and physics emphasis for adult content generation.
+
+- anatomy category preset;
+- size/proportion relative to body;
+- shape consistency;
+- material/skin matching;
+- motion stability;
+- contact/pressure behavior priority;
+- body-scale plausibility;
+- visibility/camera emphasis;
+- regeneration strictness;
+- negative prompt helpers for common anatomy failures;
+- compatibility with selected race/material.
+
+#### 6. Skin, material, and rendering
+
+- skin tone;
+- fantasy skin color;
+- subsurface scattering intensity;
+- gloss level;
+- pore/detail level;
+- freckles/scars/marks;
+- tattoos/magic markings;
+- scale/fur/feather accents;
+- slime translucency if applicable;
+- emissive/glowing accents;
+- lighting compatibility;
+- render polish priority.
+
+#### 7. Outfit and accessories
+
+- outfit category;
+- material type;
+- removable layers;
+- jewelry;
+- fantasy accessories;
+- horns/tails/wings accessory conflicts;
+- continuity locks;
+- scene-safe default outfit;
+- prompt fragments for clothed/unclothed variants where legally appropriate;
+- negative prompt helpers for outfit bleed or broken accessories.
+
+#### 8. Personality, behavior, and voice seed metadata
+
+- confident;
+- gentle;
+- dominant;
+- playful;
+- shy;
+- teasing;
+- affectionate;
+- intense;
+- elegant;
+- monstrous;
+- mischievous;
+- calm;
+- aggressive fantasy styling without unsafe content;
+- default dialogue style for future Phase 6 audio;
+- reaction intensity;
+- user notes for AI Director.
+
+#### 9. Physics emphasis
+
+- contact clarity;
+- pressure deformation;
+- skin stretch cues;
+- body recoil;
+- rhythm stability;
+- secondary motion;
+- hair/tail/wing motion;
+- slime flow;
+- slime cohesion;
+- camera stability;
+- temporal consistency priority;
+- local generation cost estimate.
+
+#### 10. Race-specific adaptive fields
+
+Examples:
+
+- demon: horn shape, tail shape, wing size, markings, glow;
+- elf: ear length, elegant proportion bias, jewelry style;
+- orc/oni: tusks, muscularity, skin tone, heavy-body movement;
+- angel: wing span, feather density, halo/glow, luminous material;
+- vampire: fangs, gothic palette, eye glow, nocturnal lighting;
+- kitsune: number of tails, tail color, ear shape, playful motion;
+- dragonkin: scale coverage, horn shape, tail thickness, wing presence;
+- android: synthetic skin, panel lines, emissive accents, mechanical seams;
+- slime: material and flow controls.
+
+### Slime variant mode
+
+Slime characters require a specialized but still integrated mode. The user should not need a separate app or workflow. Selecting Slime or Slime Futa dynamically reveals material and shape controls.
+
+Slime controls:
+
+- slime body type:
+  - full slime;
+  - humanoid slime;
+  - slime futa;
+  - partial slime overlay;
+  - slime armor/suit effect.
+- viscosity:
+  - watery;
+  - soft gel;
+  - thick gel;
+  - elastic;
+  - tar-like fantasy profile.
+- translucency:
+  - opaque;
+  - semi-translucent;
+  - highly translucent;
+  - glassy;
+  - glowing internal material.
+- bubble density:
+  - none;
+  - subtle;
+  - medium;
+  - dense;
+  - large internal bubbles.
+- flow intensity:
+  - stable;
+  - gentle flow;
+  - active flow;
+  - dramatic flow;
+  - dripping/streaming emphasis.
+- shape stability:
+  - very stable humanoid;
+  - elastic but stable;
+  - moderate deformation;
+  - highly fluid;
+  - reformation-focused.
+- cohesion/stretch:
+  - low;
+  - medium;
+  - high;
+  - strand-like stretch;
+  - snap-back behavior.
+- color/tint:
+  - single color;
+  - gradient;
+  - internal glow;
+  - pearlescent;
+  - multi-color fantasy.
+- surface gloss:
+  - matte gel;
+  - wet gloss;
+  - glassy;
+  - neon/glow.
+- slime futa controls:
+  - shape retention;
+  - material continuity;
+  - contact/pressure emphasis;
+  - motion stability;
+  - negative prompt helpers for melting or anatomy collapse.
+
+Slime success depends on avoiding uncontrolled melting, loss of humanoid readability, flicker, and inconsistent transparency. The creator should warn users when a chosen combination is likely to be unstable on local 8 GB hardware or difficult to train as a small LoRA.
+
+### Creator workflow features
+
+Must-have workflow features:
+
+- **Strong futa-on-male focused presets**:
+  - athletic humanoid futa;
+  - soft-body humanoid futa;
+  - demon futa with strong contact emphasis;
+  - succubus futa with polished lighting;
+  - orc/oni futa with heavy-body dynamics;
+  - elf/dark elf futa;
+  - kitsune/cat/wolf hybrid futa;
+  - dragonkin futa;
+  - angel futa;
+  - vampire futa;
+  - translucent slime futa;
+  - high-viscosity slime partner;
+  - multi-character compatible partner preset.
+- **Start from base image**:
+  - upload/reference image;
+  - image analysis into editable fields;
+  - visual trait extraction;
+  - optional prompt extraction;
+  - preview of inferred metadata;
+  - user confirmation before training.
+- **Live low-res preview**:
+  - 512px or similarly low-cost previews;
+  - seed lock;
+  - 2x2 or 4x grid variants;
+  - compare against metadata checklist;
+  - promote preview to scoring batch.
+- **Randomize button**:
+  - full random;
+  - race-aware random;
+  - preset mutation;
+  - locked-field randomization;
+  - surprise-me mode;
+  - mutation strength slider;
+  - randomize only colors/material/personality/anatomy/physics.
+- **Structured prompt generation**:
+  - base prompt;
+  - identity prompt;
+  - race/material prompt;
+  - futa anatomy prompt;
+  - physics emphasis prompt;
+  - style/render prompt;
+  - negative prompt;
+  - Wan-specific variant;
+  - LTX-specific variant;
+  - LoRA caption hints.
+- **Structured JSON metadata output**:
+  - character identity fields;
+  - visual traits;
+  - race/type fields;
+  - slime/material fields;
+  - personality/behavior tags;
+  - physics emphasis;
+  - prompt fragments;
+  - preview seeds;
+  - scoring history;
+  - LoRA training config;
+  - library tags;
+  - future audio defaults.
+- **Direct handoff to MVP scoring/training**:
+  - generate 10-20 starter images;
+  - present weighted Anatomy 40% / Physics 40% / Style 20% scoring grid;
+  - repeat until rolling average >=80 across 10 images;
+  - train lightweight per-character LoRA on top of the General Physics Base LoRA;
+  - register the trained partner in the Character Library;
+  - preserve all metadata for later editing/forking.
 
 ### Value added / unique proposition
 
-This phase makes Futa-Vision feel like a specialized character studio rather than a prompt box. It is especially important for multi-race futas and slime partners, where ordinary prompt fields become unmanageable. The adaptive creator also gives the app structured data that later powers AI Director scenes, chat edits, LoRA retraining, search, presets, and community sharing.
+The Adaptive Character Creator is one of Futa-Vision's strongest differentiators. It gives users the creative depth of an RPG character creator, the speed of presets/randomization, and the technical structure required for consistent LoRA training. It also solves a major prompt-engineering problem: fantasy races, slime materials, futa anatomy controls, physics emphasis, and style settings become structured data rather than fragile prompt paragraphs.
+
+Because the creator outputs both rich prompts and metadata, it powers later systems:
+
+- Character Library search and filtering;
+- AI chat editing;
+- AI Director scene planning;
+- voice/personality defaults;
+- race/material LoRA adapters;
+- community preset packs;
+- guided self-improvement;
+- regression tests for character coherence.
 
 ### Technical approach and MVP integration
 
-- Add a versioned `character_profile.schema.json`.
-- Map creator fields to:
-  - generation prompt fragments.
-  - training captions.
-  - LoRA metadata.
-  - library tags.
-  - scene compatibility filters.
-  - future audio/voice personality defaults.
-- Use the existing weighted manual scoring loop unchanged as the approval gate.
-- Add preview workflow presets that use low VRAM and fast samplers.
-- Add profile diffing so users can edit a character later and decide whether to:
-  - regenerate previews only.
-  - train a new LoRA version.
-  - fork into a new character.
-- For slime characters, store material/physics fields separately from identity fields so slime behavior can be reused as a material profile.
-- Add guardrails against trait leakage:
-  - generic physics tags go to General Physics Base LoRA.
-  - character-specific visual tags stay in partner LoRA.
+- Add `character_profile.schema.json` with versioned sections:
+  - identity;
+  - race/type;
+  - body;
+  - face;
+  - hair/head features;
+  - futa anatomy;
+  - slime/material;
+  - outfit;
+  - personality;
+  - physics;
+  - prompt fragments;
+  - training settings;
+  - library metadata.
+- Add `race_pack.schema.json` so new race/species packs can be added without rewriting the UI.
+- Build adaptive UI rules:
+  - selecting Slime reveals material controls;
+  - selecting Dragonkin reveals scale/horn/tail/wing controls;
+  - selecting Angel reveals wing/halo/luminous controls;
+  - selecting Android reveals synthetic material controls;
+  - selecting multi-character compatibility reveals stricter identity and region settings.
+- Maintain a prompt compiler that converts structured metadata into workflow-specific prompts.
+- Keep physics inheritance explicit:
+  - General Physics Base LoRA supplies shared contact/anatomy behavior;
+  - partner LoRA supplies character-specific visual identity;
+  - optional race/material adapters supply reusable fantasy traits.
+- Add profile editing/forking:
+  - edit metadata without retraining;
+  - generate new previews;
+  - train new LoRA version;
+  - fork into a new character;
+  - preserve history.
+- Add metadata-to-training caption generation with identity leakage checks.
+- Keep all creator outputs compatible with existing scoring, training, and library modules.
 
 ### Success criteria
 
-- A user can create a basic partner from fewer than 6 required fields.
-- Advanced users can define a detailed futa, slime, or slime futa profile without leaving the creator.
-- Generated starter images reflect at least 80% of selected structured fields in review tests.
-- Approved profiles train into LoRAs and appear in the Character Library with complete metadata.
-- Editing a saved profile preserves history and does not overwrite locked LoRA versions unexpectedly.
+- A basic user can create a partner from fewer than 6 required choices and generate starter images within one guided flow.
+- An advanced user can define a detailed fantasy futa, slime partner, or slime futa using adaptive fields without manually writing a full prompt.
+- At least 12 built-in race/type categories are available at launch, with schema support for more.
+- Slime mode exposes viscosity, translucency, bubble density, flow intensity, shape stability, color/tint, gloss, and cohesion controls.
+- Starter image batches correctly enter the 40/40/20 weighted scoring loop.
+- Approved characters train into LoRAs and register in the Character Library with complete JSON metadata.
+- Editing a saved profile can regenerate previews without overwriting the locked trained LoRA unless the user chooses to train a new version.
+- Race/type traits remain stable across at least 10 validation images after LoRA training.
+- Partner LoRAs do not leak unrelated visual traits into other partners in back-to-back generation tests.
 
 ### Dependencies
 
-- Character Library metadata schema.
+- Character Library schema.
 - General Physics Base LoRA.
 - Scoring loop.
-- ComfyUI image preview workflow.
-- Ostris LoRA training path.
+- ComfyUI image preview workflows.
+- Ostris LoRA training.
+- Hardware-aware preview settings.
+- Future LLM integration for assisted creation.
 
 ---
 
@@ -632,217 +1148,400 @@ This phase makes Futa-Vision feel like a specialized character studio rather tha
 
 ### Goals and key features
 
-Add multi-track audio so final videos feel produced rather than silent or manually dubbed. Audio should be generated locally where possible, aligned to the timeline, and synchronized with visible motion/physics events.
+Phase 6 adds audio production: voices, reactions, lip-sync, foley, ambience, and timeline mixing. The goal is not just to add sound after export. Audio should be generated from timeline context, character metadata, motion beats, and physics events.
+
+Key goals:
+
+- Add local-first voice profiles for the fixed male and partners.
+- Generate emotional TTS/reactions aligned to timeline events.
+- Add physics-synced foley for body contact, movement, and slime material behavior.
+- Mix multi-track audio non-destructively on the timeline.
+- Preserve full audio provenance in export metadata.
 
 Key features:
 
-- Voice cloning:
-  - fixed male voice profile.
-  - partner voice profiles.
-  - per-character voice metadata.
-  - optional local-only voice library.
-- Emotional TTS:
-  - breath intensity.
-  - moans/vocal reactions.
-  - adult dialogue/dirty-talk style categories without hardcoding explicit scripts.
-  - exertion and rhythm-aware delivery.
-  - character personality influence.
+- Voice cloning/profiles:
+  - fixed male voice profile;
+  - partner voice profiles;
+  - per-character voice tags;
+  - intensity ranges;
+  - privacy warnings for voice data;
+  - local-only default storage.
+- Emotional TTS and vocal generation:
+  - breathing;
+  - exertion;
+  - reaction intensity;
+  - short dialogue lines;
+  - character personality influence;
+  - timeline-aware pacing;
+  - batch regeneration by lane.
 - LTX-2.3 lip-sync integration:
-  - speech-to-mouth alignment.
-  - short clip lip-sync repair.
-  - timeline-level alignment pass.
+  - short clip lip-sync repair;
+  - dialogue alignment;
+  - mouth-motion pass for selected clips;
+  - confidence score.
 - Physics-synced foley:
-  - skin impact layers.
-  - pressure/stretching layers.
-  - body movement cloth/bed/contact layers.
-  - slime squelch/flow layers.
-  - wet/gloss material movement layers.
+  - skin/contact impact layers;
+  - pressure/stretch cues;
+  - body movement layers;
+  - cloth/bed/environment layers;
+  - slime squelch/flow layers;
+  - wet/gloss material movement layers;
+  - tail/wing/hair accessory layers for fantasy partners.
 - Multi-track mixing:
-  - male voice.
-  - partner voice(s).
-  - foley.
-  - ambience.
-  - music optional.
-  - master limiter.
-  - loudness normalization.
+  - fixed male voice lane;
+  - partner voice lanes;
+  - foley lane;
+  - slime/material lane;
+  - ambience lane;
+  - optional music lane;
+  - bus mixing;
+  - limiter;
+  - loudness normalization;
+  - fade/crossfade controls.
 - Auto-alignment:
-  - event detection from motion curves.
-  - manual marker placement on timeline.
-  - rhythm grid derived from thrust/motion beats.
-  - clip seam smoothing for long-form exports.
+  - marker extraction from motion curves;
+  - optical-flow beat detection;
+  - ControlNet pose movement cues;
+  - manual marker editing;
+  - rhythm grid;
+  - clip seam smoothing.
 
 ### Value added / unique proposition
 
-High-quality audio is a major gap in AI adult video tools. Physics-synced foley and per-character voices make Futa-Vision feel like a production suite, not just a visual generator. Because the timeline already knows clip boundaries, review scores, and motion metadata, audio can be generated contextually instead of manually assembled afterward.
+Audio is a major quality multiplier. Physics-synced foley and character-specific voices make outputs feel intentionally produced rather than generated silently and edited elsewhere. Since Futa-Vision already knows characters, scene beats, scores, and timeline structure, audio can be contextual and regenerable.
 
 ### Technical approach and MVP integration
 
-- Add an `audio_orchestrator.py` module that consumes timeline JSON and clip sidecars.
-- Store audio assets in `/outputs/audio` and audio profiles in the Character Library.
-- Use local voice/TTS models by default, with a plugin interface for alternate engines.
+- Add `audio_orchestrator.py` consuming timeline JSON, character metadata, and clip sidecars.
+- Add `/outputs/audio` and `/library/voices` folders to the installer and project schema.
+- Store generated audio sidecars:
+  - character ID;
+  - voice model;
+  - prompt/text;
+  - emotion tags;
+  - seed;
+  - alignment markers;
+  - mix settings;
+  - regeneration history.
 - Add timeline audio lanes and waveform previews.
-- Extract motion event candidates from:
-  - optical flow.
-  - ControlNet pose changes.
-  - prompt rhythm metadata.
-  - generation sidecar motion tags.
-- Use LTX-2.3 lip-sync as a repair/enhancement step, not as a required path for every clip.
-- Keep all generated audio sidecars reproducible:
-  - voice model.
-  - seed.
-  - text prompt.
-  - emotion tags.
-  - alignment markers.
-  - mix settings.
+- Allow local model plugins for TTS/voice generation while keeping a stable internal interface.
+- Use lip-sync selectively for clips with dialogue or visible face focus.
+- Keep video regeneration separate from audio regeneration unless the user explicitly requests both.
 
 ### Success criteria
 
-- User can assign voices to fixed male and one partner, generate reactions/dialogue, and preview synced audio on the timeline.
-- Foley markers align to visible motion beats within acceptable tolerance in test clips.
-- Final export includes mixed audio and metadata.
-- Audio generation can run locally on RTX 4070 systems without blocking visual generation indefinitely.
-- Users can regenerate one audio lane without changing approved video clips.
+- User can assign voices to fixed male and at least one partner, generate audio, and preview it in the timeline.
+- Foley events align to detected motion beats within an acceptable manual-review tolerance.
+- Slime scenes use different foley profiles from non-slime scenes based on material metadata.
+- Final export contains mixed audio and complete audio metadata.
+- One audio lane can be regenerated without changing approved video clips.
+- RTX 4070 8 GB local users can generate audio without breaking the video workflow or exhausting VRAM reserved for generation.
 
 ### Dependencies
 
 - Timeline metadata.
 - Character personality metadata from Phase 5.5.
 - LTX-2.3 integration.
-- Local TTS/voice model selection.
-- Audio export pipeline.
+- Local TTS/voice model choice.
+- Exporter audio support.
+- Installer support for audio folders/dependencies.
 
 ---
 
 ## Phase 7 — Local Uncensored LLM Integration & Guided Self-Improvement
 
-**Estimated effort/time:** 8-12 weeks.
+**Estimated effort/time:** 9-14 weeks.
 
 ### Goals and key features
 
-Integrate a local LLM layer that improves chat editing, character creation, prompt refinement, and guided model improvement while preserving local-first privacy. The LLM should act as a director assistant, prompt engineer, quality analyst, and training-session coach.
+Phase 7 gives Futa-Vision a local AI assistant layer. The LLM should power natural chat editing, targeted regeneration, Character Creator assistance, prompt refinement, review summarization, and guided self-improvement sessions. The assistant must be local-first because project data, adult prompts, character references, and voice metadata are sensitive.
 
 Core LLM stack:
 
-- Ollama integration.
-- Strong local uncensored model option, such as Dolphin, Qwen2.5 7-9B abliterated, or equivalent models available at implementation time.
-- Model capability profiles for:
-  - low-VRAM local.
-  - CPU fallback.
-  - cloud optional.
-- Local-only default for sensitive content and character data.
+- Ollama integration as the default local runtime.
+- Recommended local uncensored model class:
+  - Dolphin variants;
+  - Qwen2.5 7B-9B abliterated or equivalent;
+  - other strong uncensored local models available at implementation time.
+- Model capability profiles:
+  - CPU fallback;
+  - low-memory local;
+  - GPU local;
+  - optional cloud LLM adapter if the user explicitly configures it.
+- Installer support:
+  - detect Ollama;
+  - install or guide installation;
+  - pull recommended model;
+  - benchmark response speed;
+  - select default model;
+  - warn if the model is too weak for structured JSON reliability.
 
-Primary uses:
+### LLM roles
 
-1. **Enhanced chat editing**
-   - Convert free-form requests into structured edit intents.
-   - Ask clarification questions only when required.
-   - Support targeted regeneration instructions.
-   - Understand timeline context, character IDs, clip scores, and prior edit history.
-2. **Adaptive Character Creator assistance**
-   - Help users create race/type profiles.
-   - Suggest complementary body, material, outfit, and behavior tags.
-   - Convert base image analysis into editable fields.
-   - Explain tradeoffs between detail, consistency, and training difficulty.
-3. **Prompt refinement**
-   - Generate structured prompts from creator metadata.
-   - Maintain separation between identity prompts and physics prompts.
-   - Suggest negative prompts for common failures.
-   - Produce Wan/LTX-specific prompt variants.
-4. **Guided Interactive Training Sessions**
-   - Run conversational improvement loops focused on weak areas.
-   - Generate targeted test clips based on detected or user-reported weaknesses.
-   - Ask for specific feedback in a direct creator-friendly style, for example: “Hey Busta, here are 3 clips focused on contact deformation. Please tell me which one has the best pressure response and what looks wrong in the weaker clips.”
-   - Parse user responses into structured lessons.
-   - Store lessons as review notes, prompt rules, dataset tags, or training candidates.
-   - Perform light incremental updates to the General Physics Base LoRA when enough approved examples accumulate.
+#### 1. Natural chat editing and targeted regeneration
 
-Guided improvement areas:
+The LLM should transform user requests into safe, structured edit intents while respecting timeline context.
 
-- **Physics & Anatomy** as the highest priority:
-  - contact deformation.
-  - anatomical consistency.
-  - pressure response.
-  - motion rhythm.
-  - scale/proportion.
-- **Style & Rendering**:
-  - subsurface scattering.
-  - soft dynamic lighting.
-  - semi-realistic 3D anime polish.
-  - material consistency.
-- **Character Coherence**:
-  - fixed male identity stability.
-  - partner identity stability.
-  - multi-character separation.
-  - outfit/marking consistency.
-- **Motion Quality**:
-  - loop seams.
-  - pose stability.
-  - temporal flicker.
-  - body response and secondary motion.
-- **Slime Quality**:
-  - viscosity.
-  - translucency.
-  - bubble density.
-  - flow direction.
-  - cohesion and shape recovery.
+Examples:
 
-Background collection:
+- “Regenerate the third clip but keep the same characters and lighting.”
+- “Make the second half slower and more controlled.”
+- “Fix the transition after clip 5.”
+- “Increase slime flow in the last section without changing the partner's face.”
+- “The fixed male's face drifted in this clip; repair only that clip.”
 
-- Collect approved outputs as candidate training examples.
-- Store rejected outputs and failure reasons for negative learning.
-- Track recurring user complaints by category.
-- Suggest training sessions when a repeated weakness appears.
-- Keep all incremental updates gated by user approval.
+The assistant should:
+
+- inspect selected clip metadata;
+- identify target scope;
+- preserve protected constraints;
+- suggest a regeneration plan;
+- show the plan before execution;
+- update prompt fragments and workflow settings;
+- send jobs through the existing regeneration engine;
+- summarize what changed.
+
+#### 2. Character Creator assistant
+
+Inside Phase 5.5, the LLM should act as a character-design partner:
+
+- turn a short concept into a structured profile;
+- suggest race/type combinations;
+- explain why some combinations may be hard to train;
+- populate body/face/hair/material/personality fields;
+- generate futa-on-male focused preset variations;
+- help convert a base image into editable metadata;
+- propose negative prompts for likely failures;
+- keep identity fields separate from physics fields;
+- warn before choices likely to leak traits or destabilize the LoRA.
+
+#### 3. Prompt refinement
+
+The LLM should compile and refine prompt sections rather than producing one opaque paragraph.
+
+Prompt outputs should remain separated into:
+
+- fixed male identity lock references;
+- partner identity prompt;
+- race/material prompt;
+- futa anatomy prompt;
+- physics emphasis prompt;
+- style/render prompt;
+- motion prompt;
+- negative prompt;
+- Wan variant;
+- LTX variant;
+- LoRA caption hints.
+
+#### 4. Guided self-improvement and training sessions
+
+This is the most strategically important LLM feature. The app should run fully guided, back-and-forth conversational training sessions where it identifies weak areas, generates targeted tests, asks the user for feedback, extracts lessons, and proposes careful improvements.
+
+Example assistant tone:
+
+> Hey Busta, I made these 3-4 short clips to improve futa thrusting physics and skin stretching. Please watch them and give me detailed feedback on which clip has the best contact response, where the body motion looks wrong, and whether the skin pressure reads clearly.
+
+The session should feel like a creative coach and model trainer working with the user, not a raw prompt interface.
+
+### Guided session areas
+
+#### Physics & Anatomy — highest priority
+
+Focus areas:
+
+- contact alignment;
+- pressure response;
+- skin indentation/deformation cues;
+- stretch cues;
+- correct futa anatomy/proportions;
+- fixed male body stability;
+- body weight transfer;
+- rhythm plausibility;
+- scale consistency;
+- avoidance of warped limbs or broken anatomy.
+
+Session flow:
+
+1. Detect weakness from auto-review, user notes, or repeated low Physics scores.
+2. Generate 3-4 short test clips using the same characters but varied physics settings.
+3. Ask the user targeted questions:
+   - Which clip has the best contact?
+   - Where does the anatomy fail?
+   - Is pressure visible enough?
+   - Is motion too fast, too floaty, or too stiff?
+4. Parse the response into structured labels.
+5. Save approved clips as candidate examples.
+6. Save rejected clips with failure tags.
+7. Propose prompt/workflow changes immediately.
+8. Accumulate enough approved examples for a light General Physics Base LoRA delta update.
+
+#### Style & Rendering
+
+Focus areas:
+
+- semi-realistic 3D anime polish;
+- subsurface scattering feel;
+- soft dynamic lighting;
+- material consistency;
+- gloss control;
+- color grading;
+- temporal flicker;
+- over-sharpening or plastic look.
+
+Session examples:
+
+- Generate lighting variants for the same clip.
+- Ask whether skin/rendering feels too flat, too glossy, or too noisy.
+- Save style preference notes separately from physics lessons.
+
+#### Character Coherence
+
+Focus areas:
+
+- fixed male identity preservation;
+- partner identity stability;
+- race features staying consistent;
+- slime shape staying readable;
+- hair/eyes/skin not drifting;
+- multi-character LoRA bleed;
+- accessories not disappearing.
+
+Session examples:
+
+- Generate a validation grid for a partner across poses/lighting.
+- Ask which frames lose the character identity.
+- Convert feedback into LoRA retraining suggestions or negative prompts.
+
+#### Motion Quality
+
+Focus areas:
+
+- rhythm stability;
+- loop seams;
+- camera drift;
+- temporal flicker;
+- body recoil;
+- secondary motion;
+- tail/wing/hair movement;
+- speed consistency;
+- motion transitions.
+
+Session examples:
+
+- Generate three rhythm variants.
+- Ask whether the motion is too robotic, too chaotic, or well timed.
+- Save preferred motion settings as reusable presets.
+
+#### Slime and material quality
+
+Focus areas:
+
+- viscosity;
+- translucency;
+- bubble density;
+- flow direction;
+- shape stability;
+- cohesive reformation;
+- slime futa shape retention;
+- avoiding uncontrolled melting or flicker.
+
+Session examples:
+
+- Generate the same scene with low/medium/high viscosity.
+- Ask the user which material reads best.
+- Convert feedback into slime material profile adjustments.
+
+### Incremental General Physics Base LoRA updates
+
+The LLM should not blindly train or overwrite core models. Updates must be conservative and auditable.
+
+Proposed improvement loop:
+
+1. Collect approved outputs and rejected outputs with structured feedback.
+2. Classify lessons as:
+   - general physics;
+   - anatomy;
+   - style/rendering;
+   - character-specific;
+   - slime/material;
+   - motion;
+   - excluded/unsafe.
+3. Only generalizable lessons become candidates for the General Physics Base LoRA.
+4. Character-specific lessons stay with that character's LoRA/profile.
+5. Style-only lessons become style presets or optional style adapters.
+6. Train a small delta LoRA or minor base update using approved examples.
+7. Run regression comparisons:
+   - old base vs new delta;
+   - same seeds;
+   - same characters;
+   - same prompts;
+   - same 40/40/20 scoring categories.
+8. Present results to the user.
+9. Promote only after approval.
+10. Keep rollback available.
 
 ### Value added / unique proposition
 
-This phase turns Futa-Vision into a learning assistant. Instead of the user repeatedly guessing prompts, the app asks targeted questions, learns the creator's taste, identifies weak physics categories, and gradually improves the shared base behavior. The conversational loop makes complex model improvement accessible without requiring the user to understand LoRA training internals.
+Phase 7 makes Futa-Vision feel like a learning local studio. The user no longer has to guess which prompt phrase fixes a physics problem. The app generates tests, asks focused questions, remembers lessons, and improves prompts/workflows/base LoRA behavior over time. This is a major differentiator for local adult video generation because the hardest problems are iterative: contact, anatomy, identity, motion, and long-form consistency.
 
 ### Technical approach and MVP integration
 
-- Extend the existing placeholder chat parser into a provider-agnostic LLM service.
-- Add Ollama process detection and model management to the installer/first-run wizard.
-- Define strict JSON schemas for:
-  - edit intents.
-  - character creator suggestions.
-  - prompt refinement outputs.
-  - feedback extraction.
-  - training lessons.
-- Use retrieval over local project metadata:
-  - character profiles.
-  - clip sidecars.
-  - scoring history.
-  - failed generation notes.
-  - approved examples.
-- Add a `training_memory` store that separates:
-  - user taste/preferences.
-  - general physics lessons.
-  - character-specific lessons.
-  - style lessons.
-  - excluded/unsafe lessons.
-- Incremental LoRA updates should be conservative:
-  - accumulate approved examples.
-  - train small delta versions.
-  - run regression tests.
-  - compare with current General Physics Base LoRA.
-  - require user approval before promotion.
-- Never let the LLM directly overwrite locked fixed male identity or approved partner LoRAs without explicit user action.
+- Replace placeholder chat parsing with an LLM service abstraction.
+- Add provider modules:
+  - Ollama local;
+  - deterministic fallback;
+  - optional configured cloud adapter.
+- Use strict JSON schemas for:
+  - edit intents;
+  - character profile suggestions;
+  - prompt compiler output;
+  - review summaries;
+  - feedback extraction;
+  - guided session plans;
+  - training lessons;
+  - LoRA update proposals.
+- Add retrieval over local project data:
+  - character profiles;
+  - timeline metadata;
+  - clip sidecars;
+  - scoring history;
+  - rejected-output notes;
+  - approved examples;
+  - workflow registry;
+  - hardware profile.
+- Add a `training_memory` store:
+  - user preferences;
+  - general physics lessons;
+  - character-specific lessons;
+  - style lessons;
+  - slime/material lessons;
+  - motion presets;
+  - excluded lessons.
+- Use the existing generation/regeneration engine to create test clips.
+- Use the training orchestrator for incremental LoRA delta jobs.
+- Enforce approval gates before training, promotion, or overwrite.
 
 ### Success criteria
 
-- LLM chat editing produces valid structured intents in at least 90% of common edit requests.
-- Character Creator assistant can populate a complete draft profile from a short concept and user-selected race/type.
-- Guided training sessions produce tagged lessons that can be traced back to clips and user feedback.
-- Incremental General Physics Base LoRA updates improve targeted weaknesses without regressing identity/style benchmarks.
-- All LLM operations work locally with Ollama by default and can degrade gracefully if no model is installed.
+- Ollama detection and model selection work in first-run setup.
+- Local LLM produces valid structured edit intents for at least 90% of common chat edit requests in a test suite.
+- Character Creator assistant can generate a complete draft profile from a short concept and selected race/type.
+- Guided session can generate 3-4 targeted clips, ask focused questions, parse feedback, and save structured lessons.
+- At least one light General Physics Base LoRA delta can be trained from approved examples and compared against the current base.
+- No incremental update can overwrite the promoted base LoRA without explicit user approval.
+- The system can distinguish general physics lessons from character-specific visual identity lessons.
+- If no LLM is installed, chat editing falls back gracefully to deterministic parsing and the UI clearly explains the limitation.
 
 ### Dependencies
 
-- Phase 5 installer for Ollama/model setup.
+- Phase 5 installer support for Ollama.
 - Phase 5.5 structured character metadata.
-- Auto-review scores and timeline sidecars.
-- Stable training orchestrator.
-- Versioned base LoRA promotion workflow.
+- Clip sidecars and scoring history.
+- Training orchestrator.
+- General Physics Base LoRA versioning.
+- Regeneration engine.
+- Local project retrieval/indexing.
 
 ---
 
@@ -852,80 +1551,89 @@ This phase turns Futa-Vision into a learning assistant. Instead of the user repe
 
 ### Goals and key features
 
-Move from a Gradio-first prototype to a polished native desktop application using Tauri v2, Svelte 5, Tailwind CSS, and a Python/Rust backend bridge. The UI should feel like a dedicated creative tool rather than a notebook or demo app.
+Phase 8 moves the product from a Gradio-first prototype to a polished native desktop application. Gradio remains useful for development, but long-form creation needs native media controls, background jobs, reliable process management, and a modern app shell.
 
 Key features:
 
-- Native desktop shell with:
-  - project launcher.
-  - library browser.
-  - character creator.
-  - generation queue.
-  - timeline editor.
-  - clip review screen.
-  - chat/AI assistant panel.
-  - settings/hardware panel.
-  - export center.
-- Secure process management:
-  - launch/stop ComfyUI.
-  - launch/stop Ostris jobs.
-  - launch/stop Ollama.
-  - monitor RunPod jobs.
-  - open logs and diagnostics.
-- Better media UI:
-  - responsive video preview.
-  - timeline zoom.
-  - audio waveforms.
-  - comparison grids.
-  - keyboard shortcuts.
-  - project autosave.
-- Installer integration:
-  - desktop shortcut opens native app.
-  - first-run wizard uses native UI.
-  - update checker.
+- Tauri v2 desktop shell.
+- Svelte 5 frontend.
+- Tailwind CSS and shadcn-svelte components.
+- Python backend bridge for existing modules.
+- Rust process supervision for ComfyUI, Ostris, Ollama, and local services.
+- Native UI surfaces:
+  - setup wizard;
+  - hardware status;
+  - Character Library;
+  - Adaptive Character Creator;
+  - image scoring grid;
+  - clip review;
+  - generation queue;
+  - timeline editor;
+  - audio lanes;
+  - chat/assistant panel;
+  - RunPod dashboard;
+  - export center;
+  - diagnostics/log viewer.
+- Media-focused UX:
+  - responsive video preview;
+  - timeline zoom;
+  - waveform display;
+  - keyboard shortcuts;
+  - drag/drop imports;
+  - autosave;
+  - crash recovery;
+  - side-by-side clip comparison.
 
 ### Value added / unique proposition
 
-A native app improves trust, usability, and perceived product maturity. It also enables better long-form editing interactions than Gradio can comfortably support, including media timelines, audio lanes, drag/drop, background job notifications, and desktop file integration.
+A native app makes Futa-Vision feel like a real creative suite. It also enables better long-form editing than Gradio can provide: timelines, audio lanes, job notifications, thumbnails, file associations, background services, and crash recovery.
 
 ### Technical approach and MVP integration
 
-- Keep the Python backend modules as the generation/training core.
-- Add a local API layer between Tauri and Python:
-  - REST or WebSocket for job control.
-  - file-system event streaming.
-  - progress updates.
-  - log streaming.
-- Use Rust/Tauri for secure native operations:
-  - file picker.
-  - process supervision.
-  - path permissions.
-  - shortcut creation.
-  - hardware probing wrappers.
-- Port Gradio screens incrementally:
-  1. Setup/settings.
-  2. Character Library.
-  3. Character Creator.
-  4. Clip Review.
-  5. Timeline.
-  6. Export.
-  7. AI Assistant.
-- Preserve project file and sidecar formats so existing users can migrate.
+- Keep Python modules as the core orchestration layer.
+- Add a local API bridge:
+  - REST or WebSocket;
+  - job queue events;
+  - progress streaming;
+  - log streaming;
+  - file path resolution;
+  - project autosave events.
+- Use Rust/Tauri for:
+  - file dialogs;
+  - desktop integration;
+  - process start/stop;
+  - path permissions;
+  - shortcut creation;
+  - update checks;
+  - secure config storage.
+- Port screens incrementally:
+  1. Setup/settings;
+  2. Character Library;
+  3. Character Creator;
+  4. Scoring grid;
+  5. Clip Review;
+  6. Timeline;
+  7. Export;
+  8. AI Assistant;
+  9. Audio lanes.
+- Preserve all project, library, and sidecar formats.
 
 ### Success criteria
 
-- Native app can open existing MVP projects without migration failure.
-- Core generation/training jobs can be launched and monitored from Tauri.
-- Timeline editing feels responsive with 15+ minute projects.
-- Installer launches native app by default while retaining CLI/Gradio fallback for developers.
-- Crash recovery restores the last project state.
+- Native app opens existing MVP projects without migration failure.
+- Users can launch/stop ComfyUI, Ostris, and Ollama from the app.
+- Timeline remains responsive with 15+ minute projects built from many clips.
+- Background jobs continue updating progress while the user reviews other clips.
+- Crash recovery restores the last saved project state.
+- Gradio/developer mode remains available for debugging.
 
 ### Dependencies
 
-- Stable backend API boundaries.
+- Stable backend APIs.
 - Phase 5 installer.
 - Timeline project format.
-- Media preview/export modules.
+- Media preview and export modules.
+- Process-management strategy.
 
 ---
 
@@ -935,80 +1643,85 @@ A native app improves trust, usability, and perceived product maturity. It also 
 
 ### Goals and key features
 
-Introduce a structured scene scripting system that lets creators plan long-form videos at a higher level, then lets the AI Director generate clip plans, prompts, motion settings, audio beats, and timeline assemblies.
+Phase 9 introduces high-level scene planning. The user should be able to describe a long-form concept and let the AI Director break it into feasible shots, clip prompts, motion settings, review targets, audio cues, and timeline placeholders.
 
 Key features:
 
-- Scene script format:
-  - scene title.
-  - characters.
-  - location.
-  - mood.
-  - camera style.
-  - action beats.
-  - motion/rhythm progression.
-  - lighting progression.
-  - audio/dialogue cues.
-  - required physics emphasis.
-  - continuity locks.
+- Scene script schema:
+  - title;
+  - selected characters;
+  - location;
+  - mood;
+  - camera style;
+  - lighting progression;
+  - action beats;
+  - rhythm progression;
+  - required physics emphasis;
+  - character continuity locks;
+  - slime/material requirements;
+  - audio/dialogue cues;
+  - target duration;
+  - hardware budget.
 - AI Director modes:
-  - generate full scene plan from concept.
-  - expand outline into shots.
-  - create shot list for 15+ minute video.
-  - suggest loop-friendly segments.
-  - choose Wan vs LTX per shot.
-  - assign cloud/local jobs based on hardware.
+  - expand concept into scene plan;
+  - convert outline into shot list;
+  - produce 15+ minute timeline plan;
+  - suggest loop-friendly segments;
+  - decide Wan vs LTX per shot;
+  - choose local vs RunPod per task;
+  - generate review goals per shot;
+  - identify continuity risks.
 - Shot templates:
-  - POV-focused.
-  - side view contact study.
-  - close-up physics/detail shot.
-  - character expression shot.
-  - slime transformation shot.
-  - multi-character staging shot.
-- Beat-level quality targets:
-  - anatomy priority.
-  - physics priority.
-  - style priority.
-  - identity priority.
-  - motion priority.
+  - POV-focused shot;
+  - side-view contact study;
+  - close-up physics/detail shot;
+  - expression/reaction shot;
+  - slime transformation/material shot;
+  - multi-character staging shot;
+  - transition/establishing shot;
+  - loopable rhythm segment.
 - Director review board:
-  - generated shot candidates.
-  - approve/reject by beat.
-  - replace weak shots.
-  - maintain continuity notes.
+  - planned shots;
+  - generated candidates;
+  - approve/reject by beat;
+  - replace weak shots;
+  - preserve continuity notes;
+  - promote clips to timeline.
 
 ### Value added / unique proposition
 
-Long-form generation is difficult because users must manually assemble many clips. AI Director mode turns the product into a creative partner: users define a fantasy, progression, and characters, then the app proposes a feasible production plan optimized for hardware and quality gates.
+Long-form creation is difficult because users must manually plan dozens of clips. AI Director mode turns Futa-Vision into a production planner: it converts a concept into an achievable clip-by-clip plan optimized for the user's hardware, characters, and quality gates.
 
 ### Technical approach and MVP integration
 
-- Build a `scene_script.schema.json` that references Character Library IDs and timeline clip IDs.
-- Use the Phase 7 LLM service to expand concepts into structured scripts.
-- Use the existing generation planner to convert shots into ComfyUI/RunPod jobs.
-- Integrate with timeline as planned clip placeholders:
-  - pending.
-  - generating.
-  - review.
-  - approved.
-  - replaced.
-- Generate audio cues from the same script where Phase 6 is available.
-- Store scene scripts inside project folders for reproducibility.
+- Add `scene_script.schema.json` referencing Character Library IDs and timeline clip IDs.
+- Use the Phase 7 LLM to expand concepts into structured scripts.
+- Use generation planner to convert shots into local or RunPod jobs.
+- Represent planned shots as timeline placeholders:
+  - planned;
+  - generating;
+  - review;
+  - approved;
+  - needs replacement;
+  - final.
+- Generate audio cue placeholders for Phase 6.
+- Store script, shot list, prompts, and generated clip links in project metadata.
 
 ### Success criteria
 
-- User can generate a coherent 10-15 minute shot plan from a short concept and two selected characters.
-- AI Director creates hardware-realistic job batches rather than impossible monolithic generations.
-- Approved shots can automatically populate the timeline in order.
-- Revisions to a beat regenerate only affected clips.
+- User can generate a coherent 10-15 minute shot plan from a short concept and selected characters.
+- AI Director creates hardware-realistic batches instead of impossible monolithic generations.
+- Approved shots can populate the timeline in order.
+- Regenerating one beat does not disturb unrelated approved beats.
+- Scene script export/import works across projects when required characters/assets are present.
 
 ### Dependencies
 
 - Phase 7 LLM integration.
+- Character Library metadata.
 - Timeline placeholders.
-- Stable generation planner.
-- Character Library roles and metadata.
-- Audio cues from Phase 6 for full experience.
+- Generation planner.
+- Audio cue support for full experience.
 
 ---
 
@@ -1018,61 +1731,73 @@ Long-form generation is difficult because users must manually assemble many clip
 
 ### Goals and key features
 
-Deepen the secondary niches so slime futas, slime-on-male content, and multi-race futas are as polished as humanoid partners.
+Phase 10 deepens fantasy and slime support so secondary niches feel native rather than prompt hacks. Race packs and material profiles should be reusable, stackable, and reviewable.
 
 Key features:
 
-- Race-specific anatomy/style packs:
-  - demon horns/tails/wings/material accents.
-  - elf ears/elegant proportions.
-  - orc muscularity/tusks/skin variants.
-  - animal hybrid ears/tails/fur accents.
-  - dragon hybrid scales/horns/tails.
-- Race-specific motion packs:
-  - heavy-body movement.
-  - agile/light-body movement.
-  - tail secondary motion.
-  - wing/tail collision constraints.
+- Race packs:
+  - demon/succubus;
+  - elf/dark elf;
+  - orc/oni;
+  - angel;
+  - vampire;
+  - kitsune;
+  - cat/wolf/fox hybrids;
+  - dragonkin;
+  - reptile/lizard hybrids;
+  - android/synthetic;
+  - alien/cosmic;
+  - avian/harpy;
+  - additional community-defined packs.
+- Race-specific consistency checks:
+  - horns stay present;
+  - ears/tails remain stable;
+  - wings do not randomly vanish;
+  - scales/fur/markings remain coherent;
+  - tusks/fangs do not distort;
+  - accessories avoid cross-character bleed.
 - Slime material system:
-  - reusable material profiles.
-  - viscosity presets.
-  - translucent render prompts.
-  - bubble and internal-flow prompts.
-  - flow/cohesion behavior profiles.
-  - shape stability controls.
-- Slime-specific auto-review:
-  - material consistency.
-  - flow plausibility.
-  - cohesive shape recovery.
-  - transparent body readability.
-  - unwanted melting/flicker detection.
-- Hybrid scene constraints:
-  - avoid extra limbs unless intended.
-  - preserve ears/tails/horns across frames.
-  - region/layer isolation for fantasy traits.
+  - reusable material profiles;
+  - viscosity presets;
+  - translucency presets;
+  - bubble/internal flow presets;
+  - color/tint profiles;
+  - gloss/emission presets;
+  - shape stability profiles;
+  - slime futa shape-retention profiles.
+- Optional stackable adapters:
+  - race LoRA adapters;
+  - material LoRA adapters;
+  - style adapters;
+  - motion adapters.
+- Specialized auto-review:
+  - race trait stability;
+  - slime material consistency;
+  - flow plausibility;
+  - humanoid readability;
+  - temporal flicker;
+  - multi-character trait bleed.
 
 ### Value added / unique proposition
 
-Instead of treating fantasy partners as prompt variants, Futa-Vision can provide structured, reusable race/material systems that creators can trust. Slime futa content in particular becomes a marquee specialty with dedicated controls and review scoring.
+Futa-Vision can become especially strong in fantasy and slime content by treating race and material behavior as structured systems. This makes complex partners more consistent, easier to create, and easier to share.
 
 ### Technical approach and MVP integration
 
-- Extend Phase 5.5 character schema with race/material plugin sections.
-- Add preset packs as JSON manifests.
-- Add race-specific prompt templates and negative prompt sets.
-- Train optional race/material LoRA adapters that stack with:
-  - General Physics Base LoRA.
-  - character LoRA.
-  - style LoRA.
-- Use LayerDiffuse/regional ControlNets to preserve fantasy features in multi-character scenes.
-- Add validation tests for trait stability across short clips.
+- Extend Character Creator with race/material plugin packs.
+- Add `race_pack.schema.json` and `material_profile.schema.json`.
+- Add prompt templates, negative prompts, preview workflows, and validation tests per pack.
+- Train optional reusable adapters only when enough clean examples exist.
+- Use LayerDiffuse/regional ControlNet workflows to prevent trait bleed in multi-character scenes.
+- Add review metrics for each pack.
 
 ### Success criteria
 
-- Race presets produce recognizable traits in starter images and preserve them through LoRA training.
-- Slime profiles produce visually distinct viscosity/translucency/flow behavior.
-- Slime auto-review catches common failures such as uncontrolled melting, loss of humanoid shape, or inconsistent transparency.
-- Multi-race scenes maintain per-character visual separation.
+- Built-in race packs preserve defining traits in at least 80% of validation previews.
+- Slime material profiles produce visibly distinct viscosity/translucency/flow behavior.
+- Slime auto-review catches common failures such as uncontrolled melting, loss of humanoid shape, inconsistent transparency, and severe flicker.
+- Multi-race group scenes maintain per-character visual separation.
+- Race/material packs can be exported/imported as structured metadata packages.
 
 ### Dependencies
 
@@ -1080,6 +1805,7 @@ Instead of treating fantasy partners as prompt variants, Futa-Vision can provide
 - General Physics Base LoRA.
 - Regional/layer workflow support.
 - Auto-review extensions.
+- Optional adapter training pipeline.
 
 ---
 
@@ -1089,61 +1815,75 @@ Instead of treating fantasy partners as prompt variants, Futa-Vision can provide
 
 ### Goals and key features
 
-Enable safe, metadata-rich sharing of presets, character profiles, workflows, and review recipes without forcing users to share private model weights or sensitive local data.
+Phase 11 adds controlled sharing of presets, profiles, workflows, and review recipes while preserving local-first privacy. The goal is not to force a centralized platform. The goal is to make useful assets portable and safe to inspect.
 
 Key features:
 
-- Export/import packages:
-  - character profile only.
-  - preset pack.
-  - prompt/workflow recipe.
-  - review profile.
-  - scene script.
-  - full project archive where user chooses included assets.
+- Export/import package types:
+  - character profile only;
+  - race pack;
+  - slime/material profile;
+  - prompt recipe;
+  - workflow recipe;
+  - review profile;
+  - motion preset;
+  - audio preset;
+  - scene script;
+  - full project archive with explicit asset choices.
 - Privacy controls:
-  - strip local paths.
-  - strip fixed male references.
-  - strip private voice data.
-  - strip training images unless explicitly included.
-  - watermark/package provenance optional.
-- Community preset hub concept:
-  - race presets.
-  - slime material profiles.
-  - lighting styles.
-  - motion templates.
-  - quality gate profiles.
+  - strip local paths;
+  - strip fixed male references by default;
+  - strip private training images by default;
+  - strip voice profiles by default;
+  - strip RunPod credentials always;
+  - preview package contents before export.
 - Compatibility checker:
-  - required models.
-  - LoRA dependencies.
-  - workflow extensions.
-  - minimum VRAM.
-- Rating/notes system for local imported assets.
+  - required base models;
+  - required LoRAs/adapters;
+  - required ComfyUI nodes;
+  - minimum VRAM;
+  - workflow version;
+  - missing dependency resolution through installer.
+- Local rating/notes:
+  - favorite imported presets;
+  - mark broken/outdated;
+  - private notes;
+  - local trust level.
+- Optional community hub foundation:
+  - package metadata;
+  - screenshots/thumbnails;
+  - versioning;
+  - checksums;
+  - moderation-ready manifest fields.
 
 ### Value added / unique proposition
 
-Futa-Vision can build a creator ecosystem around structured recipes and presets without immediately hosting sensitive content. Users benefit from shared expertise while retaining local privacy and control over model files.
+Community assets can accelerate creativity without exposing private identity references or local projects. Structured packages also allow users to share race presets, slime materials, scene templates, and review settings without bundling sensitive model weights.
 
 ### Technical approach and MVP integration
 
-- Define package manifest schemas with semver.
-- Add import sandbox validation before files enter the active library.
+- Define package manifest schemas with semantic versions.
+- Add import sandbox validation before assets enter the active library.
 - Add package signing/checksums for trusted sources.
-- Support missing-dependency resolution through the Phase 5 installer.
-- Keep marketplace/community features optional and disabled by default for local-first users.
+- Use installer dependency resolver for missing nodes/models.
+- Keep online/community features optional and disabled by default.
+- Add clear warnings for packages that include model weights, images, or voice data.
 
 ### Success criteria
 
-- Users can export and import a character profile/preset without path breakage.
-- Import warns clearly about missing models/extensions.
-- Private fixed male identity files are excluded by default.
-- Packages are versioned and reversible.
+- User can export/import a character profile without broken local paths.
+- Fixed male identity files are excluded by default in every share flow.
+- Import warns about missing models/extensions before activation.
+- Package contents can be previewed before import.
+- Imported race/material presets appear in the Adaptive Character Creator.
 
 ### Dependencies
 
-- Stable metadata schemas.
+- Stable schemas.
 - Installer dependency resolver.
 - Character Creator profiles.
 - Workflow registry.
+- Privacy review.
 
 ---
 
@@ -1153,57 +1893,72 @@ Futa-Vision can build a creator ecosystem around structured recipes and presets 
 
 ### Goals and key features
 
-Give creators and developers measurable insight into quality, performance, and recurring failure modes.
+Phase 12 gives users and developers measurable insight into quality, performance, cost, and recurring failures. The app should become self-diagnosing.
 
 Key features:
 
-- Local production dashboard:
-  - average anatomy score.
-  - average physics score.
-  - average style score.
-  - rejection rate.
-  - regeneration count.
-  - time per approved second.
-  - VRAM usage profile.
-  - RunPod cost per minute.
+- Production dashboard:
+  - average Anatomy score;
+  - average Physics score;
+  - average Style score;
+  - approval rate;
+  - rejection rate;
+  - regeneration count;
+  - time per approved second;
+  - VRAM usage;
+  - local vs RunPod task split;
+  - RunPod cost per approved minute;
+  - upscale time;
+  - export success/failure history.
 - Failure taxonomy:
-  - anatomy drift.
-  - contact failure.
-  - identity drift.
-  - temporal flicker.
-  - loop seam.
-  - slime material failure.
-  - lighting mismatch.
-  - multi-character bleeding.
+  - fixed male identity drift;
+  - partner identity drift;
+  - contact failure;
+  - weak deformation;
+  - anatomy break;
+  - motion flicker;
+  - loop seam;
+  - lighting mismatch;
+  - slime material failure;
+  - race trait instability;
+  - multi-character bleed;
+  - OOM/performance failure.
 - Recommendation engine:
-  - lower resolution if OOM risk.
-  - use Wan for physics-heavy shots.
-  - use LTX for fast drafts.
-  - retrain partner LoRA if identity failures repeat.
-  - run guided training if physics failures repeat.
+  - lower resolution or shorter clips for OOM risk;
+  - use Wan for physics-heavy shots;
+  - use LTX for drafts;
+  - retrain partner LoRA after repeated identity failures;
+  - run guided Physics & Anatomy training after repeated low Physics scores;
+  - use RunPod for upscale or high-quality retraining;
+  - adjust LoRA weights to reduce trait bleed.
 - Benchmark suite:
-  - RTX 4070 local-low-vram baseline.
-  - higher VRAM local baseline.
-  - RunPod cloud profile baseline.
-  - model/workflow regression checks.
+  - RTX 4070 8 GB baseline;
+  - higher VRAM local baseline;
+  - RunPod cloud profile baseline;
+  - base LoRA regression set;
+  - Character Creator validation set;
+  - installer validation set.
 
 ### Value added / unique proposition
 
-Creators can make informed decisions instead of guessing. Developers can detect regressions before release. The product becomes self-diagnosing, which is crucial for complex local AI stacks.
+Creators can make better decisions when the app explains where time, money, and quality are being lost. Developers can catch regressions before release. Guided self-improvement becomes more targeted because it can use real failure trends.
 
 ### Technical approach and MVP integration
 
-- Aggregate existing sidecar metadata into analytics tables.
-- Add local-only dashboards with optional anonymized export disabled by default.
-- Add regression test project with sample characters and fixed prompts.
-- Connect analytics to Phase 7 guided improvement suggestions.
+- Aggregate existing sidecar metadata into local analytics tables.
+- Keep analytics local by default.
+- Add optional anonymized diagnostic export only with explicit user action.
+- Connect analytics to Phase 7 guided session recommendations.
+- Add benchmark projects with sample characters, prompts, and expected score ranges.
+- Add release validation scripts that compare new workflows against known baselines.
 
 ### Success criteria
 
-- Dashboard identifies the most common failure category for a project.
-- Performance estimates are within a practical tolerance after calibration.
+- Dashboard identifies the most common failure category in a project.
+- Time/cost estimates become more accurate after calibration from completed jobs.
 - Workflow/model changes can be compared against benchmark baselines.
-- Recommendations lead users to actionable fixes.
+- Recommendation engine suggests actionable fixes for repeated failures.
+- Analytics can trigger a guided self-improvement session focused on the weakest category.
 
 ### Dependencies
 
@@ -1211,6 +1966,7 @@ Creators can make informed decisions instead of guessing. Developers can detect 
 - Scoring and auto-review reliability.
 - Hardware telemetry.
 - Timeline/project history.
+- Phase 7 training memory for full recommendations.
 
 ---
 
@@ -1221,45 +1977,61 @@ Creators can make informed decisions instead of guessing. Developers can detect 
 - RTX 4070 8 GB remains the default optimization target.
 - Default visual generation should be 720p with final upscale after timeline approval.
 - Prefer short clips, smart extension, and clip assembly over monolithic long generations.
-- Provide clear OOM fallbacks:
-  - lower preview resolution.
-  - shorter clip length.
-  - reduced batch size.
-  - quantized model.
-  - cloud offload.
-- Never hide estimated VRAM/cost/time from users.
+- Default local settings should favor reliability over maximum resolution.
+- Every heavy action should show estimated time, VRAM risk, disk usage, and cloud alternative.
+- OOM fallbacks should include:
+  - lower preview resolution;
+  - shorter clip length;
+  - reduced batch size;
+  - quantized model;
+  - lower sampler settings;
+  - CPU/offload option where practical;
+  - RunPod dispatch.
 
 ### Model separation
 
 - Fixed male identity is locked and protected.
 - General Physics Base LoRA contains reusable anatomy/physics/style rules only.
 - Partner LoRAs contain partner-specific visual identity and personality cues.
-- Race/material adapters should be reusable and stackable.
-- Prompt generation should keep identity, physics, style, motion, and material sections separate.
+- Race/material adapters contain reusable fantasy or slime traits.
+- Prompt generation must keep identity, physics, style, motion, material, and negative prompts separated.
+- Incremental training must never promote a model without regression comparison and user approval.
 
 ### Quality gates
 
 - Manual weighted scoring remains central for character approval:
-  - Anatomy 40%.
-  - Physics 40%.
-  - Style 20%.
+  - Anatomy 40%;
+  - Physics 40%;
+  - Style 20%;
   - rolling average >=80 over 10 images.
 - Auto-review should mirror those categories for video clips.
 - Approved outputs should be easy to promote into training candidates.
 - Rejected outputs should be categorized so the app learns what to fix.
+- Long-form timelines should warn if too many clips fall below threshold.
+- Exports should preserve score metadata.
 
 ### Local-first privacy
 
-- Sensitive character references, voice profiles, and adult project files remain local by default.
-- Cloud jobs should upload only required assets and only after explicit user action.
+- Sensitive character references, voice profiles, adult prompts, scoring notes, and generated outputs remain local by default.
+- Cloud jobs upload only the assets required for that job and only after explicit user action.
 - RunPod manifests should be transparent and reproducible.
-- Community sharing must strip private paths and fixed male identity references by default.
+- Community sharing must strip private paths, fixed male identity references, training images, and voice data by default.
+- Logs and diagnostics should redact credentials and avoid leaking private project names unless the user opts in.
+
+### UX philosophy
+
+- The user should direct, not debug.
+- Every automated action should be inspectable before execution.
+- Every regeneration should preserve provenance.
+- Every AI suggestion should be reversible.
+- Advanced controls should exist, but quick mode should remain approachable.
+- The app should explain tradeoffs: quality vs speed, local vs cloud, consistency vs creativity, detail vs trainability.
 
 ---
 
 ## Potential Future Enhancements
 
-These ideas are intentionally expansive; they can be prioritized, trimmed, or postponed later.
+These ideas are intentionally expansive and can be prioritized, trimmed, or postponed later.
 
 ### Advanced motion-control library
 
@@ -1269,21 +2041,28 @@ These ideas are intentionally expansive; they can be prioritized, trimmed, or po
 - Contact-aware motion stabilization.
 - Automatic camera shake reduction.
 - Camera path presets for POV, side, close-up, and cinematic angles.
+- Motion style packs for gentle, intense, heavy-body, agile, slime-flow, and fantasy-tail/wing scenes.
+- Clip-to-clip motion matching for smoother transitions.
 
 ### Contact and deformation diagnostics
 
 - Visual overlay for contact zones.
-- Before/after comparison of deformation strength.
 - Frame-by-frame contact score graph.
-- Automatic detection of floating bodies or missed contact.
-- Training recommendations based on failed contact zones.
+- Before/after comparison of deformation strength.
+- Detection of floating bodies, missed contact, or impossible overlap.
+- Heatmap of weak contact frames.
+- Training recommendations based on repeated contact failures.
+- Side-by-side prompt/workflow comparison for contact improvements.
 
 ### Prompt and LoRA stack debugger
 
-- Show exactly which prompt fragments came from character, physics, style, scene, and chat edit layers.
-- Warn about contradictory prompt instructions.
-- Display LoRA strength stack and regional assignments.
-- One-click “reduce trait bleed” mode for multi-character scenes.
+- Show exactly which prompt fragments came from character, physics, style, scene, chat edit, and AI Director layers.
+- Warn about contradictory instructions.
+- Display LoRA stack, strengths, and regions.
+- One-click “reduce trait bleed” mode.
+- Prompt diff between original and regenerated clips.
+- LoRA influence visualizer.
+- Suggested LoRA strength ranges based on validation history.
 
 ### Project templates
 
@@ -1293,22 +2072,31 @@ These ideas are intentionally expansive; they can be prioritized, trimmed, or po
 - Slime showcase template.
 - Multi-race partner template.
 - Character LoRA validation template.
+- Physics benchmark template.
+- Audio/foley test template.
+- RunPod overnight batch template.
 
 ### Advanced continuity tools
 
-- Continuity board for outfits, hair, lighting, location, and body marks.
-- Automatic thumbnail strip across timeline.
+- Continuity board for outfits, hair, lighting, location, race traits, and body marks.
+- Automatic thumbnail strip across the timeline.
 - Identity drift heatmap.
 - Scene-wide lighting harmonizer.
 - Color grading presets.
+- Character trait checklist per clip.
+- Continuity warnings before export.
+- Automatic regeneration suggestions for continuity breaks.
 
 ### Safer model/version management
 
-- Model registry with checksums and licenses.
+- Model registry with checksums and license notes.
 - Workflow compatibility matrix.
 - Rollback to previous known-good install.
 - Project-level dependency lockfile.
-- “Archive this project with all dependencies” mode.
+- Archive project with required dependencies.
+- Duplicate model detection.
+- Model disk-space optimizer.
+- Known-bad version warnings.
 
 ### Creator productivity features
 
@@ -1318,6 +2106,9 @@ These ideas are intentionally expansive; they can be prioritized, trimmed, or po
 - Keyboard-shortcut review mode.
 - Favorite prompt fragments.
 - Personal style presets.
+- Saved regeneration recipes.
+- Auto-naming and tagging for clips.
+- Daily/weekly production summary.
 
 ### Optional cloud scaling beyond RunPod
 
@@ -1326,6 +2117,9 @@ These ideas are intentionally expansive; they can be prioritized, trimmed, or po
 - Cloud budget caps.
 - Automatic local/cloud split by task type.
 - Encrypted temporary cloud bundles with expiry cleanup.
+- Cloud queue scheduling.
+- Remote benchmark comparison.
+- Bring-your-own-server mode.
 
 ### Plugin system
 
@@ -1335,6 +2129,59 @@ These ideas are intentionally expansive; they can be prioritized, trimmed, or po
 - Audio engine adapters.
 - Export codec plugins.
 - Community preset importers.
+- LLM provider plugins.
+- Custom installer manifests.
+- Experimental model adapters isolated from stable workflows.
+
+### Advanced audio features
+
+- Voice performance presets per character.
+- Timeline beat composer.
+- Foley material designer.
+- Automatic room ambience generation.
+- Dialogue script editor.
+- Multi-language TTS where supported.
+- Audio continuity scoring.
+- Stem export for external DAWs.
+
+### Dataset and training management
+
+- Dataset browser with approved/rejected filters.
+- Caption editor with LLM suggestions.
+- Duplicate and near-duplicate detector.
+- Identity leakage detector.
+- Training set balance dashboard.
+- Automatic validation split builder.
+- LoRA comparison board.
+- Training job cost estimator.
+
+### 3D reference and hybrid-render workflows
+
+- Blender/Unreal pose reference import.
+- Depth/normal map generation from simple 3D proxies.
+- Camera path reference import.
+- Collision proxy guides for contact alignment.
+- Render-to-video reference pass workflows.
+- ControlNet conditioning from 3D scene blocking.
+
+### Collaboration and versioning
+
+- Local project snapshots.
+- Branch/fork project variants.
+- Compare two timeline versions.
+- Notes/comments per clip.
+- Export review package without private models.
+- Team-safe asset manifest with redaction controls.
+
+### Safety, privacy, and governance utilities
+
+- Strong adult-only project acknowledgement flow.
+- Private data audit before cloud dispatch.
+- Credential redaction in logs.
+- Local encryption option for libraries/projects.
+- Per-project privacy settings.
+- Export scrubber for metadata.
+- Model/source attribution fields.
 
 ### Research-track features
 
@@ -1343,7 +2190,10 @@ These ideas are intentionally expansive; they can be prioritized, trimmed, or po
 - 3D proxy body collision guides.
 - Differentiable or pseudo-physical contact feedback loops.
 - Temporal LoRA/adapters for stable repeated motion.
-- Hybrid render-to-video workflows using Blender/Unreal reference passes.
+- Motion-specific LoRA deltas.
+- Self-supervised clip ranking from user approvals.
+- Active-learning queues for the General Physics Base LoRA.
+- Automated A/B testing of workflow changes.
 
 ---
 
@@ -1351,10 +2201,13 @@ These ideas are intentionally expansive; they can be prioritized, trimmed, or po
 
 A practical release sequence is:
 
-1. **Make installation reliable first** after the current MVP stabilizes, because setup pain will block almost every nontechnical creator.
-2. **Ship Adaptive Character Creator next** because structured character data improves every downstream system: prompting, LoRA training, audio, AI Director, library search, and community presets.
-3. **Add AI Audio and Local LLM assistant** once visual generation is useful enough that users are building real timelines.
-4. **Move to Tauri/Svelte** when the workflow is proven and the UI needs native editing polish.
-5. **Invest in AI Director and community systems** after the core local creator loop is dependable.
+1. **Stabilize the current MVP loop** so library, scoring, training, generation sidecars, timeline, cloud dispatch, and export metadata remain reliable.
+2. **Make installation reliable** because setup pain will block almost every nontechnical creator.
+3. **Ship the Adaptive Character Creator** because structured character data improves prompting, LoRA training, audio, AI Director, library search, race/slime systems, and community presets.
+4. **Upgrade video generation and review continuously** with the General Physics Base LoRA benchmark as the quality compass.
+5. **Add local LLM assistance and guided self-improvement** once users are generating enough clips for meaningful feedback loops.
+6. **Add AI audio** when timelines are stable enough for synchronization and mixing.
+7. **Move to Tauri/Svelte** when the workflow is proven and native media UX becomes the bottleneck.
+8. **Invest in AI Director, expanded race/slime packs, community packages, and analytics** after the core local creator loop is dependable.
 
-The strongest near-term differentiator is not simply “generate adult video locally.” It is a creator loop that repeatedly improves futa-on-male anatomy, contact physics, character consistency, slime/material behavior, and long-form continuity while remaining realistic for consumer hardware.
+The strongest differentiator is not simply “local adult AI video generation.” It is a guided creator loop that repeatedly improves futa-on-male anatomy, contact physics, character consistency, slime/material behavior, motion quality, audio alignment, and long-form continuity while staying realistic for RTX 4070-class hardware and preserving local-first privacy.
