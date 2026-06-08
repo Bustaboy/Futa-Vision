@@ -31,6 +31,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import zipfile
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -49,10 +50,29 @@ MIN_CACHE_FREE_GB = 100.0
 SETTINGS_DIR = ROOT / "settings"
 INSTALLER_STATE_PATH = SETTINGS_DIR / "installer_state.json"
 INSTALLER_MANIFEST_PATH = SETTINGS_DIR / "installer_manifest.json"
+MODEL_CATALOG_PATH = SETTINGS_DIR / "model_catalog.json"
+MODEL_CATALOG_EXAMPLE_PATH = SETTINGS_DIR / "model_catalog.example.json"
+MODEL_INSTALL_STATE_PATH = SETTINGS_DIR / "model_install_state.json"
 APP_SETTINGS_PATH = SETTINGS_DIR / "futa_vision_settings.json"
 ENV_PATH = ROOT / ".env"
 ENV_EXAMPLE_PATH = ROOT / ".env.example"
 LOG_PATH = ROOT / "logs" / "installer.log"
+DIAGNOSTICS_DIR = ROOT / "logs" / "diagnostics"
+ENGINE_ROOT = ROOT / "engines"
+BUNDLED_COMFYUI_PATH = ENGINE_ROOT / "ComfyUI"
+BUNDLED_OSTRIS_PATH = ENGINE_ROOT / "ostris-ai-toolkit"
+HF_KEYRING_SERVICE = "Futa-Vision"
+HF_KEYRING_USERNAME = "huggingface_token"
+MINIMAL_TIER_DESCRIPTION = (
+    "Minimal (Recommended, ~6-10 GB): Ostris portable, ComfyUI + essential nodes, "
+    "Pony V7 (strong all-rounder for futa-on-male), General Physics Base LoRA, "
+    "and sample characters."
+)
+TIER_SIZE_ESTIMATES_GB = {
+    "minimal": (6.0, 10.0),
+    "standard": (14.0, 24.0),
+    "full": (40.0, None),
+}
 
 def _load_rich() -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
     """Load rich when available, otherwise provide tiny console fallbacks."""
@@ -181,6 +201,15 @@ class HardwareProfile(str, Enum):
     CLOUD_RECOMMENDED = "cloud_recommended"
 
 
+class InstallTier(str, Enum):
+    """Model/framework bundles exposed by the first-run installer."""
+
+    MINIMAL = "minimal"
+    STANDARD = "standard"
+    FULL = "full"
+    CUSTOM = "custom"
+
+
 PROFILE_SETTINGS: dict[HardwareProfile, dict[str, str]] = {
     HardwareProfile.LOCAL_LOW_VRAM: {
         "resolution": "1280x720 (720p)",
@@ -258,6 +287,51 @@ class RepairActionResult:
 
 
 @dataclass(slots=True)
+class ModelCatalogEntry:
+    """Single model exposed by the Settings-tab Model Downloader."""
+
+    id: str
+    name: str
+    description: str
+    category: str
+    tier: str
+    priority: int
+    default_for_tier: list[str]
+    size_gb: float
+    repo_id: str | None
+    filename: str | None
+    destination: str
+    gated: bool
+    strong_points: list[str] = field(default_factory=list)
+    weaknesses: list[str] = field(default_factory=list)
+    recommended_for: list[str] = field(default_factory=list)
+    sha256: str | None = None
+
+
+@dataclass(slots=True)
+class ModelPlan:
+    """Resolved model install plan for a tier or custom selection."""
+
+    tier: str
+    skip_models: bool
+    entries: list[ModelCatalogEntry]
+    total_size_gb: float
+    missing_metadata: list[str]
+    gated_models: list[str]
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class HealthCheckItem:
+    """Individual health check row used by CLI, UI, and diagnostics."""
+
+    name: str
+    status: str
+    detail: str
+    action: str = ""
+
+
+@dataclass(slots=True)
 class InstallCandidate:
     """A detected local application or engine path."""
 
@@ -278,17 +352,23 @@ class InstallerState:
     adult_confirmed: bool
     privacy_acknowledged: bool
     hardware_profile: str
+    install_tier: str
+    skip_models: bool
     runpod_configured: bool
     sample_image_path: str | None
     sample_clip_path: str | None
     detected: dict[str, list[dict[str, str]]]
+    model_plan: dict[str, Any]
+    post_install_target: str
     warnings: list[str]
 
 
 PROJECT_DIRECTORIES: list[Path] = [
+    Path("engines"),
     Path("library") / "male" / "backups",
     Path("library") / "partners",
     Path("library") / "indexes",
+    Path("library") / "sample_characters",
     Path("general_physics_lora"),
     Path("datasets") / "general_physics",
     Path("datasets") / "male",
@@ -398,7 +478,10 @@ def path_text(path: Path | None) -> str:
 def module_available(name: str) -> bool:
     """Return whether an optional module can be imported."""
 
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return name in sys.modules
 
 
 def run_command(command: list[str], timeout: int = 30) -> subprocess.CompletedProcess[str] | None:
@@ -541,6 +624,661 @@ def merge_env_file(updates: dict[str, str], path: Path = ENV_PATH) -> None:
     LOGGER.info("Merged %s keys into environment file: %s", len(updates), path)
 
 
+def builtin_model_catalog() -> dict[str, Any]:
+    """Return the bundled model catalog scaffold used until users customize it."""
+
+    return {
+        "schema_version": "phase5.model_catalog.v1",
+        "updated_at": None,
+        "notes": "Fill repo_id and filename before enabling live downloads for placeholder entries.",
+        "models": [
+            {
+                "id": "pony_v7_base",
+                "name": "Pony V7",
+                "description": "Strong all-rounder base model for futa-on-male scenes and character starts.",
+                "category": "base",
+                "tier": "minimal",
+                "priority": 10,
+                "default_for_tier": ["minimal", "standard", "full"],
+                "size_gb": 6.5,
+                "repo_id": "",
+                "filename": "",
+                "destination": "models/checkpoints/pony_v7.safetensors",
+                "gated": True,
+                "strong_points": [
+                    "strong all-rounder for futa-on-male",
+                    "good anatomy consistency",
+                    "solid style range",
+                ],
+                "weaknesses": [
+                    "requires exact catalog metadata before automatic download",
+                    "may need LoRA support for specialized slime physics",
+                ],
+                "recommended_for": ["best for futa anatomy", "first partner creation", "minimal install"],
+            },
+            {
+                "id": "general_physics_base_lora",
+                "name": "General Physics Base LoRA",
+                "description": "Project base LoRA for anatomy, contact, deformation, stretch, and motion consistency.",
+                "category": "lora",
+                "tier": "minimal",
+                "priority": 20,
+                "default_for_tier": ["minimal", "standard", "full"],
+                "size_gb": 0.25,
+                "repo_id": "",
+                "filename": "",
+                "destination": "models/loras/general_physics_base.safetensors",
+                "gated": False,
+                "strong_points": ["good for slime physics", "contact consistency", "low-VRAM friendly"],
+                "weaknesses": ["training/export path must provide real artifact metadata before download"],
+                "recommended_for": ["good for slime physics", "physics/anatomy baseline"],
+            },
+            {
+                "id": "sample_characters",
+                "name": "Sample characters/assets",
+                "description": "Small local sample assets used by first-run validation and the quick-start flow.",
+                "category": "samples",
+                "tier": "minimal",
+                "priority": 30,
+                "default_for_tier": ["minimal", "standard", "full"],
+                "size_gb": 0.1,
+                "repo_id": "",
+                "filename": "",
+                "destination": "library/sample_characters",
+                "gated": False,
+                "strong_points": ["fast validation", "quick-start friendly"],
+                "weaknesses": ["not production model weights"],
+                "recommended_for": ["first-run validation", "create your first futa partner"],
+            },
+            {
+                "id": "ltx_preview_video",
+                "name": "LTX preview video model",
+                "description": "Fast preview video model slot for short local clips.",
+                "category": "video",
+                "tier": "standard",
+                "priority": 40,
+                "default_for_tier": ["standard", "full"],
+                "size_gb": 4.0,
+                "repo_id": "",
+                "filename": "",
+                "destination": "models/diffusion_models/ltx_preview.safetensors",
+                "gated": False,
+                "strong_points": ["fast preview", "short clips"],
+                "weaknesses": ["not final-quality physics"],
+                "recommended_for": ["fast preview", "low-VRAM friendly"],
+            },
+            {
+                "id": "wan_final_video",
+                "name": "Wan final video model",
+                "description": "Higher-quality final video model slot for physics-heavy clips.",
+                "category": "video",
+                "tier": "full",
+                "priority": 50,
+                "default_for_tier": ["full"],
+                "size_gb": 28.0,
+                "repo_id": "",
+                "filename": "",
+                "destination": "models/diffusion_models/wan_final.safetensors",
+                "gated": True,
+                "strong_points": ["high-quality final clips", "physics-heavy scenes"],
+                "weaknesses": ["large download", "cloud recommended on 8GB VRAM"],
+                "recommended_for": ["high-quality final clips", "cloud/offload"],
+            },
+        ],
+    }
+
+
+def ensure_model_catalog_example() -> None:
+    """Write the example model catalog when absent."""
+
+    if MODEL_CATALOG_EXAMPLE_PATH.exists():
+        return
+    write_json(MODEL_CATALOG_EXAMPLE_PATH, builtin_model_catalog())
+
+
+def load_model_catalog(path: Path | None = None) -> list[ModelCatalogEntry]:
+    """Load model catalog entries from user catalog, example catalog, or built-ins."""
+
+    target = path or (MODEL_CATALOG_PATH if MODEL_CATALOG_PATH.exists() else MODEL_CATALOG_EXAMPLE_PATH)
+    payload = read_json(target) if target.exists() else builtin_model_catalog()
+    raw_models = payload.get("models", []) if isinstance(payload, dict) else []
+    entries: list[ModelCatalogEntry] = []
+    for raw in raw_models:
+        if not isinstance(raw, dict):
+            continue
+        default_for_tier = raw.get("default_for_tier") or []
+        if isinstance(default_for_tier, str):
+            default_for_tier = [default_for_tier]
+        entries.append(ModelCatalogEntry(
+            id=str(raw.get("id") or raw.get("name") or "unnamed_model").strip(),
+            name=str(raw.get("name") or raw.get("id") or "Unnamed model").strip(),
+            description=str(raw.get("description") or "").strip(),
+            category=str(raw.get("category") or "other").strip(),
+            tier=str(raw.get("tier") or "custom").strip().lower(),
+            priority=int(raw.get("priority") or 999),
+            default_for_tier=[str(item).strip().lower() for item in default_for_tier if str(item).strip()],
+            size_gb=float(raw.get("size_gb") or 0),
+            repo_id=(str(raw.get("repo_id")).strip() if raw.get("repo_id") else None),
+            filename=(str(raw.get("filename")).strip() if raw.get("filename") else None),
+            destination=str(raw.get("destination") or "").strip(),
+            gated=bool(raw.get("gated", False)),
+            strong_points=[str(item) for item in raw.get("strong_points", []) if str(item).strip()],
+            weaknesses=[str(item) for item in raw.get("weaknesses", []) if str(item).strip()],
+            recommended_for=[str(item) for item in raw.get("recommended_for", []) if str(item).strip()],
+            sha256=(str(raw.get("sha256")).strip() if raw.get("sha256") else None),
+        ))
+    return sorted(entries, key=lambda entry: (entry.priority, entry.name.lower()))
+
+
+def model_metadata_complete(entry: ModelCatalogEntry) -> bool:
+    """Return whether an entry has enough exact metadata for live download."""
+
+    if entry.category == "samples":
+        return bool(entry.destination)
+    return bool(entry.repo_id and entry.filename and entry.destination and entry.size_gb > 0)
+
+
+def select_model_entries(
+    tier: str,
+    *,
+    catalog: list[ModelCatalogEntry] | None = None,
+    custom_ids: Iterable[str] | None = None,
+) -> list[ModelCatalogEntry]:
+    """Select catalog entries deterministically by tier defaults and priority."""
+
+    normalized_tier = (tier or InstallTier.MINIMAL.value).lower()
+    entries = catalog or load_model_catalog()
+    if normalized_tier == InstallTier.CUSTOM.value:
+        requested = {item.strip() for item in (custom_ids or []) if item and item.strip()}
+        selected = [entry for entry in entries if entry.id in requested]
+    elif normalized_tier == InstallTier.FULL.value:
+        selected = list(entries)
+    else:
+        selected = [
+            entry for entry in entries
+            if normalized_tier in entry.default_for_tier or entry.tier == normalized_tier
+        ]
+    return sorted(selected, key=lambda entry: (entry.priority, entry.name.lower()))
+
+
+def build_model_plan(
+    tier: str = InstallTier.MINIMAL.value,
+    *,
+    skip_models: bool = False,
+    catalog: list[ModelCatalogEntry] | None = None,
+    custom_ids: Iterable[str] | None = None,
+) -> ModelPlan:
+    """Build the pre-download model summary shown before any large transfer."""
+
+    normalized_tier = (tier or InstallTier.MINIMAL.value).lower()
+    entries = [] if skip_models else select_model_entries(normalized_tier, catalog=catalog, custom_ids=custom_ids)
+    missing_metadata = [entry.name for entry in entries if not model_metadata_complete(entry)]
+    gated_models = [entry.name for entry in entries if entry.gated]
+    total_size = round(sum(entry.size_gb for entry in entries), 2)
+    warnings: list[str] = []
+    if skip_models:
+        warnings.append("Skip Models selected: framework will be ready, but model readiness remains incomplete.")
+    if normalized_tier == InstallTier.MINIMAL.value:
+        warnings.append(MINIMAL_TIER_DESCRIPTION)
+        pony = [entry for entry in entries if entry.id == "pony_v7_base"]
+        if not pony:
+            warnings.append("Minimal requires Pony V7. Choose another base model manually or use Skip Models.")
+    if missing_metadata:
+        warnings.append("Live downloads are blocked until exact repo_id and filename metadata are present.")
+    if normalized_tier == InstallTier.FULL.value:
+        warnings.append("Full installs all cataloged models and should be treated as a 40+ GB download.")
+    return ModelPlan(
+        tier=normalized_tier,
+        skip_models=skip_models,
+        entries=entries,
+        total_size_gb=total_size,
+        missing_metadata=missing_metadata,
+        gated_models=gated_models,
+        warnings=warnings,
+    )
+
+
+def model_plan_to_dict(plan: ModelPlan) -> dict[str, Any]:
+    """Serialize a model plan for manifests and UI JSON."""
+
+    return {
+        "tier": plan.tier,
+        "skip_models": plan.skip_models,
+        "total_size_gb": plan.total_size_gb,
+        "missing_metadata": list(plan.missing_metadata),
+        "gated_models": list(plan.gated_models),
+        "warnings": list(plan.warnings),
+        "entries": [json_safe(entry) for entry in plan.entries],
+    }
+
+
+def resolve_model_destination(entry: ModelCatalogEntry, comfyui_path: str | Path | None = None) -> Path:
+    """Resolve a catalog destination to a local path without touching the file."""
+
+    destination = Path(entry.destination)
+    if destination.is_absolute():
+        return destination
+    if str(destination).startswith("library/"):
+        return ROOT / destination
+    root = Path(comfyui_path) if comfyui_path else BUNDLED_COMFYUI_PATH
+    return root / destination
+
+
+def model_install_status(entry: ModelCatalogEntry, comfyui_path: str | Path | None = None) -> dict[str, Any]:
+    """Return installed/missing/metadata status for a single model catalog entry."""
+
+    destination = resolve_model_destination(entry, comfyui_path)
+    partial = destination.with_suffix(destination.suffix + ".part") if destination.suffix else destination / ".part"
+    if destination.is_dir():
+        installed = any(destination.iterdir()) if destination.exists() else False
+    else:
+        installed = destination.exists() and destination.is_file()
+    if installed:
+        status = "installed"
+    elif partial.exists():
+        status = "partial"
+    elif not model_metadata_complete(entry):
+        status = "metadata_missing"
+    else:
+        status = "missing"
+    return {
+        "id": entry.id,
+        "name": entry.name,
+        "category": entry.category,
+        "status": status,
+        "path": str(destination),
+        "size_gb": entry.size_gb,
+        "gated": entry.gated,
+        "recommended_for": entry.recommended_for,
+    }
+
+
+def write_model_install_state(plan: ModelPlan, comfyui_path: str | Path | None = None) -> dict[str, Any]:
+    """Persist model readiness separate from installer state."""
+
+    state = {
+        "schema_version": "phase5.model_install_state.v1",
+        "updated_at": now_iso(),
+        "tier": plan.tier,
+        "skip_models": plan.skip_models,
+        "summary": model_plan_to_dict(plan),
+        "models": [model_install_status(entry, comfyui_path) for entry in plan.entries],
+    }
+    write_json(MODEL_INSTALL_STATE_PATH, state)
+    return state
+
+
+def redacted_secret(value: str | None) -> str:
+    """Return a display-safe secret marker."""
+
+    if not value:
+        return ""
+    return "***redacted***"
+
+
+def store_hf_token(token: str, *, allow_env_fallback: bool = True) -> tuple[bool, str]:
+    """Store a Hugging Face token in OS keyring, falling back to .env when needed."""
+
+    normalized = (token or "").strip()
+    if not normalized:
+        return False, "No Hugging Face token was provided."
+    if module_available("keyring"):
+        try:
+            keyring = importlib.import_module("keyring")
+            keyring.set_password(HF_KEYRING_SERVICE, HF_KEYRING_USERNAME, normalized)
+            LOGGER.info("Stored Hugging Face token in OS keyring")
+            return True, "Hugging Face token stored in OS keyring."
+        except Exception as exc:  # noqa: BLE001 - keyring backends vary by OS/session.
+            LOGGER.warning("Keyring token storage failed: %s", exc)
+            if not allow_env_fallback:
+                return False, f"Could not store token in OS keyring: {exc}"
+    if allow_env_fallback:
+        merge_env_file({"HF_TOKEN": normalized, "HF_API_TOKEN": normalized})
+        return True, "OS keyring was unavailable, so the token was written to .env."
+    return False, "OS keyring is unavailable and .env fallback was disabled."
+
+
+def get_hf_token() -> str | None:
+    """Read Hugging Face token from OS keyring first, then environment/.env."""
+
+    if module_available("keyring"):
+        try:
+            keyring = importlib.import_module("keyring")
+            token = keyring.get_password(HF_KEYRING_SERVICE, HF_KEYRING_USERNAME)
+            if token:
+                return str(token)
+        except Exception as exc:  # noqa: BLE001 - token lookup should not crash setup.
+            LOGGER.warning("Keyring token lookup failed: %s", exc)
+    env = {**load_env_file(), **os.environ}
+    return env.get("HF_TOKEN") or env.get("HF_API_TOKEN") or env.get("HUGGINGFACE_TOKEN")
+
+
+def test_hf_token_access(token: str | None = None) -> tuple[str, str]:
+    """Return Hugging Face auth status without raising at UI boundaries."""
+
+    active_token = (token or get_hf_token() or "").strip()
+    if not active_token:
+        return "missing", "No Hugging Face token is configured. Gated models will require login."
+    if not module_available("huggingface_hub"):
+        return "error", "huggingface-hub is not installed."
+    try:
+        hub = importlib.import_module("huggingface_hub")
+        api = hub.HfApi()
+        api.whoami(token=active_token)
+    except Exception as exc:  # noqa: BLE001 - network/auth errors become status text.
+        LOGGER.warning("Hugging Face token test failed: %s", exc)
+        return "error", f"Hugging Face token test failed: {exc}"
+    return "ready", "Hugging Face token works."
+
+
+def cleanup_partial_model_files(comfyui_path: str | Path | None = None) -> list[Path]:
+    """Delete only known incomplete model download files."""
+
+    removed: list[Path] = []
+    for entry in load_model_catalog():
+        destination = resolve_model_destination(entry, comfyui_path)
+        partial = destination.with_suffix(destination.suffix + ".part") if destination.suffix else destination / ".part"
+        if partial.exists() and partial.is_file():
+            partial.unlink()
+            removed.append(partial)
+    return removed
+
+
+def download_models_for_plan(
+    plan: ModelPlan,
+    *,
+    comfyui_path: str | Path | None = None,
+    dry_run: bool = False,
+    token: str | None = None,
+) -> list[dict[str, Any]]:
+    """Download selected models or return deterministic dry-run progress events."""
+
+    events: list[dict[str, Any]] = []
+    if plan.skip_models:
+        if not dry_run:
+            write_model_install_state(plan, comfyui_path)
+        return [{"event": "skip_models", "message": "Framework-only install selected; model downloads skipped."}]
+    if plan.missing_metadata and not dry_run:
+        missing = ", ".join(plan.missing_metadata)
+        raise InstallerError(
+            f"Model downloads cannot start because exact catalog metadata is missing for: {missing}. "
+            "Fill repo_id/filename in settings/model_catalog.json, choose another base model, or use --skip-models."
+        )
+
+    for entry in plan.entries:
+        destination = resolve_model_destination(entry, comfyui_path)
+        events.append({
+            "event": "queued",
+            "model": entry.name,
+            "size_gb": entry.size_gb,
+            "path": str(destination),
+            "message": f"{entry.name}: queued ({entry.size_gb:g} GB)",
+        })
+        if dry_run:
+            continue
+        if entry.category == "samples":
+            sample_paths = create_sample_characters()
+            events.append({
+                "event": "generated",
+                "model": entry.name,
+                "path": str(destination),
+                "message": f"{entry.name}: generated {len(sample_paths)} local sample assets",
+            })
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not module_available("huggingface_hub"):
+            raise InstallerError("huggingface-hub is not installed; install requirements before downloading models.")
+        if entry.gated and not (token or get_hf_token()):
+            raise InstallerError(f"{entry.name} is gated. Login to Hugging Face or use --skip-models.")
+        hub = importlib.import_module("huggingface_hub")
+        downloaded = hub.hf_hub_download(
+            repo_id=entry.repo_id,
+            filename=entry.filename,
+            token=token or get_hf_token(),
+            local_dir=str(destination.parent),
+        )
+        downloaded_path = Path(downloaded)
+        if downloaded_path.resolve() != destination.resolve() and downloaded_path.exists():
+            shutil.copy2(downloaded_path, destination)
+        events.append({
+            "event": "downloaded",
+            "model": entry.name,
+            "path": str(destination),
+            "message": f"{entry.name}: downloaded",
+        })
+    if not dry_run:
+        write_model_install_state(plan, comfyui_path)
+    return events
+
+
+def render_model_plan(plan: ModelPlan) -> None:
+    """Display the pre-download model summary in the CLI wizard."""
+
+    title = "Model install plan"
+    if plan.tier == InstallTier.MINIMAL.value:
+        title = "Minimal install plan"
+    table = Table(title=title, box=box.SIMPLE_HEAVY)
+    table.add_column("Model", style="bold")
+    table.add_column("Category")
+    table.add_column("Size")
+    table.add_column("Default")
+    table.add_column("Status")
+    for entry in plan.entries:
+        default_text = ", ".join(entry.default_for_tier) or "custom"
+        status = "download-ready" if model_metadata_complete(entry) else "metadata needed"
+        table.add_row(entry.name, entry.category, f"{entry.size_gb:g} GB", default_text, status)
+    if not plan.entries:
+        table.add_row("Skip Models", "framework", "0 GB", plan.tier, "models skipped")
+    CONSOLE.print(table)
+    size_note = f"Estimated model download: {plan.total_size_gb:g} GB."
+    if plan.tier in TIER_SIZE_ESTIMATES_GB:
+        low, high = TIER_SIZE_ESTIMATES_GB[plan.tier]
+        estimate = f"{low:g}+ GB" if high is None else f"{low:g}-{high:g} GB"
+        size_note += f" Tier target estimate: {estimate}."
+    CONSOLE.print(Panel(
+        "\n".join([size_note, *plan.warnings]),
+        title="Download summary before anything large",
+        border_style="yellow" if plan.warnings else "green",
+    ))
+
+
+def health_status_summary(items: list[HealthCheckItem]) -> str:
+    """Return the one-line Health Check summary."""
+
+    errors = [item for item in items if item.status == "error"]
+    warnings = [item for item in items if item.status == "warning"]
+    missing_models = [
+        item for item in items
+        if item.name.lower().startswith("model:") and item.status in {"warning", "error"}
+    ]
+    if not errors and not warnings:
+        return "✅ All systems ready"
+    if missing_models:
+        return f"⚠️ {len(missing_models)} models missing"
+    if errors:
+        return f"⚠️ {len(errors)} critical checks need attention"
+    return f"⚠️ {len(warnings)} checks need attention"
+
+
+def run_health_check(
+    detections: dict[str, list[InstallCandidate]] | None = None,
+    report: HardwareReport | None = None,
+    plan: ModelPlan | None = None,
+) -> dict[str, Any]:
+    """Run framework, model, GPU, disk, token, and sample health checks."""
+
+    active_detections = detections or scan_for_installs()
+    active_report = report or build_hardware_report()
+    env = load_env_file()
+    comfyui_path = _first_detected_path(active_detections, "comfyui") or env.get("COMFYUI_PATH") or str(BUNDLED_COMFYUI_PATH if BUNDLED_COMFYUI_PATH.exists() else "")
+    items: list[HealthCheckItem] = []
+
+    required_modules = ["gradio", "huggingface_hub", "rich", "requests", "PIL", "cv2"]
+    missing_modules = [name for name in required_modules if not module_available(name)]
+    items.append(HealthCheckItem(
+        "Python dependencies",
+        "ready" if not missing_modules else "warning",
+        "All key modules import." if not missing_modules else f"Missing modules: {', '.join(missing_modules)}",
+        "Run `python -m pip install -r requirements.txt`." if missing_modules else "",
+    ))
+
+    items.append(HealthCheckItem(
+        "ComfyUI",
+        "ready" if active_detections.get("comfyui") or BUNDLED_COMFYUI_PATH.exists() else "warning",
+        _first_detected_path(active_detections, "comfyui") or (str(BUNDLED_COMFYUI_PATH) if BUNDLED_COMFYUI_PATH.exists() else "ComfyUI not detected."),
+        "Run installer framework bootstrap or set COMFYUI_PATH." if not active_detections.get("comfyui") and not BUNDLED_COMFYUI_PATH.exists() else "",
+    ))
+    items.append(HealthCheckItem(
+        "Ostris",
+        "ready" if active_detections.get("ostris") or BUNDLED_OSTRIS_PATH.exists() else "warning",
+        _first_detected_path(active_detections, "ostris") or (str(BUNDLED_OSTRIS_PATH) if BUNDLED_OSTRIS_PATH.exists() else "Ostris portable not detected."),
+        "Run installer framework bootstrap or set OSTRIS_PATH before training." if not active_detections.get("ostris") and not BUNDLED_OSTRIS_PATH.exists() else "",
+    ))
+
+    node_status = _comfyui_node_status(comfyui_path or None)
+    missing_nodes = [node for node, status in node_status.items() if status == "missing"]
+    unknown_nodes = [node for node, status in node_status.items() if status == "unknown"]
+    node_problem = missing_nodes or unknown_nodes
+    items.append(HealthCheckItem(
+        "ComfyUI essential nodes",
+        "ready" if not node_problem else "warning",
+        "Essential nodes installed." if not node_problem else f"Missing/unknown nodes: {', '.join(node_problem)}",
+        "Use ComfyUI-Manager or `python installer.py repair --reinstall-node-help`." if node_problem else "",
+    ))
+
+    active_plan = plan or build_model_plan(InstallTier.MINIMAL.value)
+    if active_plan.skip_models:
+        items.append(HealthCheckItem(
+            "Models",
+            "warning",
+            "Skip Models is active; framework is ready but model readiness is incomplete.",
+            "Open Model Downloader when disk/network are available.",
+        ))
+    else:
+        for entry in active_plan.entries:
+            status = model_install_status(entry, comfyui_path or None)
+            ready = status["status"] == "installed"
+            meta_missing = status["status"] == "metadata_missing"
+            items.append(HealthCheckItem(
+                f"Model: {entry.name}",
+                "ready" if ready else "warning",
+                "Installed." if ready else f"{status['status']} at {status['path']}",
+                "Fill catalog metadata before download." if meta_missing else "Open Model Downloader and download this model.",
+            ))
+
+    hf_status, hf_message = test_hf_token_access()
+    items.append(HealthCheckItem(
+        "Hugging Face token",
+        "ready" if hf_status == "ready" else "warning",
+        hf_message,
+        "Use Settings -> Login to Hugging Face for gated models." if hf_status != "ready" else "",
+    ))
+    items.append(HealthCheckItem(
+        "GPU/CUDA",
+        "ready" if active_report.gpu.cuda_available else "warning",
+        active_report.profile_reason,
+        "Install/update NVIDIA drivers or use RunPod/cloud." if not active_report.gpu.cuda_available else "",
+    ))
+    items.append(HealthCheckItem(
+        "Disk cache",
+        "ready" if active_report.cache_free_gb >= MIN_CACHE_FREE_GB else "warning",
+        f"{active_report.cache_free_gb} GB free in cache filesystem.",
+        "Move cache to a larger SSD or run repair cache cleanup." if active_report.cache_free_gb < MIN_CACHE_FREE_GB else "",
+    ))
+
+    manifest = read_json(INSTALLER_MANIFEST_PATH)
+    sample_status = str(manifest.get("sample_tests", {}).get("status") or "not_run")
+    items.append(HealthCheckItem(
+        "Sample image/clip",
+        "ready" if sample_status == "passed" else "warning",
+        f"Sample status: {sample_status}",
+        "Run `python installer.py test-samples`." if sample_status != "passed" else "",
+    ))
+
+    summary = health_status_summary(items)
+    return {
+        "schema_version": "phase5.health.v1",
+        "checked_at": now_iso(),
+        "status": "all_good" if summary == "✅ All systems ready" else "needs_attention",
+        "summary": summary,
+        "checks": [json_safe(item) for item in items],
+    }
+
+
+def render_health_check(result: dict[str, Any]) -> None:
+    """Print health check results as a concise table."""
+
+    title = str(result.get("summary", "Health Check"))
+    title = title.replace("✅", "OK:").replace("⚠️", "Needs attention:").replace("❌", "Error:")
+    table = Table(title=title, box=box.SIMPLE_HEAVY)
+    table.add_column("Check", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail")
+    table.add_column("Action")
+    for item in result.get("checks", []):
+        table.add_row(
+            str(item.get("name")),
+            str(item.get("status")),
+            str(item.get("detail")),
+            str(item.get("action") or "—"),
+        )
+    CONSOLE.print(table)
+
+
+def render_health_markdown(result: dict[str, Any]) -> str:
+    """Render health results for the Settings tab."""
+
+    rows = []
+    for item in result.get("checks", []):
+        status = item.get("status", "unknown")
+        prefix = "✅" if status == "ready" else "⚠️" if status == "warning" else "❌"
+        action = f" Action: {item.get('action')}" if item.get("action") else ""
+        rows.append(f"- {prefix} **{item.get('name')}**: {item.get('detail')}.{action}")
+    return "\n".join([f"## {result.get('summary', 'Health Check')}", *rows])
+
+
+def _redact_text(value: str) -> str:
+    """Redact common local secret values before diagnostics export."""
+
+    redacted_lines: list[str] = []
+    secret_keys = ("TOKEN", "KEY", "SECRET", "PASSWORD")
+    for line in value.splitlines():
+        stripped = line.strip()
+        if "=" in stripped:
+            key, _raw = stripped.split("=", 1)
+            if any(marker in key.upper() for marker in secret_keys):
+                redacted_lines.append(f"{key}=***redacted***")
+                continue
+        redacted_lines.append(line)
+    return "\n".join(redacted_lines) + ("\n" if value.endswith("\n") else "")
+
+
+def export_diagnostics() -> Path:
+    """Bundle redacted logs, settings, manifests, and health data for support."""
+
+    DIAGNOSTICS_DIR.mkdir(parents=True, exist_ok=True)
+    output = DIAGNOSTICS_DIR / f"futa_vision_diagnostics_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.zip"
+    health = run_health_check()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("health_check.json", json.dumps(json_safe(health), indent=2, sort_keys=True))
+        archive.writestr("health_check.md", render_health_markdown(health))
+        for path in [ENV_PATH, APP_SETTINGS_PATH, INSTALLER_STATE_PATH, INSTALLER_MANIFEST_PATH, MODEL_INSTALL_STATE_PATH, MODEL_CATALOG_PATH, MODEL_CATALOG_EXAMPLE_PATH, LOG_PATH]:
+            if not path.exists():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            try:
+                archive_name = str(path.relative_to(ROOT)).replace("\\", "/")
+            except ValueError:
+                archive_name = path.name
+            archive.writestr(archive_name, _redact_text(text))
+    LOGGER.info("Exported diagnostics bundle: %s", output)
+    return output
+
+
+
 
 
 def default_installer_manifest() -> dict[str, Any]:
@@ -597,6 +1335,26 @@ def default_installer_manifest() -> dict[str, Any]:
             "api_key_present": False,
             "default_mode": "Auto",
             "notes": "RunPod is optional but recommended for long Wan jobs, high-resolution upscales, or repeated CUDA out-of-memory errors on 8GB GPUs.",
+        },
+        "model_downloads": {
+            "tier": "minimal",
+            "skip_models": False,
+            "minimal_definition": MINIMAL_TIER_DESCRIPTION,
+            "total_size_gb": 0,
+            "models": [],
+            "missing_metadata": [],
+            "gated_models": [],
+            "state_path": str(MODEL_INSTALL_STATE_PATH.relative_to(ROOT)),
+            "status": "not_configured",
+        },
+        "post_install": {
+            "next_screen": "welcome",
+            "call_to_action": "Create your first futa partner",
+        },
+        "health_check": {
+            "summary": "Health Check has not run yet.",
+            "status": "not_run",
+            "last_run_at": None,
         },
         "last_run_summary": {
             "status": "not_configured",
@@ -738,6 +1496,25 @@ def write_installer_manifest(
             "warnings": sample_warnings or [],
         }
 
+    if state:
+        model_plan = state.model_plan or {}
+        manifest["model_downloads"] = {
+            "tier": state.install_tier,
+            "skip_models": state.skip_models,
+            "minimal_definition": MINIMAL_TIER_DESCRIPTION,
+            "total_size_gb": model_plan.get("total_size_gb", 0),
+            "models": model_plan.get("entries", []),
+            "missing_metadata": model_plan.get("missing_metadata", []),
+            "gated_models": model_plan.get("gated_models", []),
+            "warnings": model_plan.get("warnings", []),
+            "state_path": str(MODEL_INSTALL_STATE_PATH.relative_to(ROOT)),
+            "status": "framework_ready_models_skipped" if state.skip_models else "metadata_needed" if model_plan.get("missing_metadata") else "ready_or_downloadable",
+        }
+        manifest["post_install"] = {
+            "next_screen": state.post_install_target,
+            "call_to_action": "Create your first futa partner",
+        }
+
     runpod_key_present = bool(env.get("RUNPOD_API_KEY") or (state and state.runpod_configured))
     manifest["runpod"] = {
         "ready": runpod_key_present,
@@ -750,6 +1527,11 @@ def write_installer_manifest(
     manifest["last_successful_installer_run"] = completed_at if overall_status in {"installed", "repaired", "samples_passed"} else manifest.get("last_successful_installer_run")
     manifest["overall_status"] = overall_status
     warnings = list(report.warnings if report else []) + list(sample_warnings or [])
+    model_downloads = manifest.get("model_downloads", {})
+    if model_downloads.get("skip_models"):
+        warnings.append("Skip Models was selected. Framework is ready, but model downloads are incomplete.")
+    for missing_model in model_downloads.get("missing_metadata", []) or []:
+        warnings.append(f"Model catalog metadata is incomplete for {missing_model}; live download is disabled until repo_id and filename are set.")
     if not detected_paths.get("comfyui"):
         warnings.append("ComfyUI was not detected. Set COMFYUI_PATH or install ComfyUI, then rerun repair.")
     if not detected_paths.get("ostris"):
@@ -1173,6 +1955,8 @@ def ensure_env_defaults(detections: dict[str, list[InstallCandidate]], profile: 
         "FUTA_VISION_CACHE_DIR": "cache",
         "FUTA_VISION_LOGS_DIR": "logs",
         "FUTA_VISION_HARDWARE_PROFILE": profile.value,
+        "FUTA_VISION_INSTALL_TIER": InstallTier.MINIMAL.value,
+        "FUTA_VISION_SKIP_MODELS": "false",
     }
     for key, value in defaults.items():
         if not existing.get(key):
@@ -1232,6 +2016,38 @@ def create_sample_image() -> Path:
     return output
 
 
+def create_sample_characters() -> list[Path]:
+    """Create small local sample-character metadata/assets for quick-start validation."""
+
+    sample_dir = ROOT / "library" / "sample_characters"
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = sample_dir / "sample_partner_001.json"
+    metadata = {
+        "schema_version": "phase5.sample_character.v1",
+        "id": "sample_partner_001",
+        "display_name": "Sample Partner",
+        "call_to_action": "Create your first futa partner",
+        "recommended_start": "Open Character Creator and use Pony V7 + General Physics Base LoRA once installed.",
+        "tags": ["sample", "futa", "partner", "quick-start"],
+        "created_at": now_iso(),
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    thumbnail_path = sample_dir / "sample_partner_001.png"
+    if module_available("PIL"):
+        image_module = importlib.import_module("PIL.Image")
+        draw_module = importlib.import_module("PIL.ImageDraw")
+        image = image_module.new("RGB", (512, 512), color=(33, 37, 52))
+        draw = draw_module.Draw(image)
+        draw.rectangle((28, 28, 484, 484), outline=(113, 201, 206), width=5)
+        draw.text((56, 80), "Sample Partner", fill=(235, 245, 255))
+        draw.text((56, 122), "Quick-start asset", fill=(190, 210, 220))
+        draw.text((56, 164), "Use Character Creator", fill=(206, 201, 113))
+        image.save(thumbnail_path)
+    elif not thumbnail_path.exists():
+        thumbnail_path.write_bytes(b"P6\n2 2\n255\n" + bytes([33, 37, 52, 113, 201, 206] * 2))
+    return [metadata_path, thumbnail_path]
+
+
 def create_sample_clip() -> Path:
     """Create a short MP4 clip that verifies output/clip permissions and codecs."""
 
@@ -1268,6 +2084,7 @@ def run_sample_tests() -> tuple[Path, Path, list[str]]:
     warnings: list[str] = []
     image = create_sample_image()
     clip = create_sample_clip()
+    create_sample_characters()
     if clip.suffix != ".mp4":
         warnings.append("Short clip test wrote a placeholder because OpenCV MP4 writing was unavailable.")
     return image, clip, warnings
@@ -1630,12 +2447,103 @@ def choose_profile(report: HardwareReport, non_interactive: bool, requested: str
     return HardwareProfile(selected)
 
 
+def choose_install_tier(args: argparse.Namespace, non_interactive: bool) -> tuple[str, bool]:
+    """Select model/framework tier and Skip Models behavior."""
+
+    requested_arg = getattr(args, "tier", None)
+    skip_models = bool(getattr(args, "skip_models", False))
+    if non_interactive or requested_arg or skip_models:
+        return requested_arg or InstallTier.MINIMAL.value, skip_models
+
+    CONSOLE.print("\n[bold]Install tier options[/bold]")
+    CONSOLE.print(f"1. {MINIMAL_TIER_DESCRIPTION}")
+    CONSOLE.print("2. Standard: Minimal plus recommended preview/video/upscale models.")
+    CONSOLE.print("3. Full: all cataloged models/workflows; expect 40+ GB.")
+    CONSOLE.print("4. Skip Models: framework only for limited disk space or slow internet.")
+    choices = [tier.value for tier in InstallTier]
+    choices.append("skip_models")
+    selected = Prompt.ask("Choose install tier", choices=choices, default=InstallTier.MINIMAL.value)
+    if selected == "skip_models":
+        return InstallTier.MINIMAL.value, True
+    return selected, False
+
+
+def command_for_comfyui_bootstrap(report: HardwareReport) -> list[str]:
+    """Build the ComfyUI bootstrap command without executing it."""
+
+    version = load_env_file().get("COMFYUI_VERSION") or os.getenv("COMFYUI_VERSION") or "v0.22.0"
+    gpu_flag = "--nvidia" if report.gpu.cuda_available else "--cpu"
+    return [
+        sys.executable,
+        "-m",
+        "comfy_cli",
+        "--workspace",
+        str(BUNDLED_COMFYUI_PATH),
+        "--skip-prompt",
+        "install",
+        "--version",
+        version,
+        gpu_flag,
+    ]
+
+
+def bootstrap_frameworks(
+    args: argparse.Namespace,
+    detections: dict[str, list[InstallCandidate]],
+    report: HardwareReport,
+) -> list[RepairActionResult]:
+    """Optionally bootstrap missing portable framework installs."""
+
+    results: list[RepairActionResult] = []
+    should_bootstrap = bool(getattr(args, "bootstrap_frameworks", False))
+    if getattr(args, "skip_framework_bootstrap", False):
+        should_bootstrap = False
+    elif not should_bootstrap and not getattr(args, "non_interactive", False):
+        missing = []
+        if not detections.get("comfyui") and not BUNDLED_COMFYUI_PATH.exists():
+            missing.append("ComfyUI")
+        if not detections.get("ostris") and not BUNDLED_OSTRIS_PATH.exists():
+            missing.append("Ostris portable")
+        if missing:
+            should_bootstrap = Confirm.ask(
+                f"Install missing framework components now ({', '.join(missing)})?",
+                default=False,
+            )
+    if not should_bootstrap:
+        results.append(RepairActionResult("Framework bootstrap", "skipped", ["Use --bootstrap-frameworks to install missing portable engines."]))
+        return results
+
+    ENGINE_ROOT.mkdir(parents=True, exist_ok=True)
+    if not detections.get("comfyui") and not BUNDLED_COMFYUI_PATH.exists():
+        if not module_available("comfy_cli"):
+            results.append(RepairActionResult("ComfyUI portable", "skipped", ["comfy-cli is not importable. Install requirements first."]))
+        else:
+            command = command_for_comfyui_bootstrap(report)
+            completed = run_command(command, timeout=3600)
+            if completed is not None and completed.returncode == 0:
+                results.append(RepairActionResult("ComfyUI portable", "complete", [BUNDLED_COMFYUI_PATH]))
+            else:
+                detail = completed.stderr.strip() if completed and completed.stderr else "ComfyUI bootstrap command did not complete."
+                results.append(RepairActionResult("ComfyUI portable", "failed", [detail]))
+
+    if not detections.get("ostris") and not BUNDLED_OSTRIS_PATH.exists():
+        BUNDLED_OSTRIS_PATH.mkdir(parents=True, exist_ok=True)
+        guidance = BUNDLED_OSTRIS_PATH / "INSTALL_REQUIRED.txt"
+        guidance.write_text(
+            "Ostris portable placeholder created by Futa-Vision.\n"
+            "Install or clone Ostris AI Toolkit here, then rerun Health Check.\n",
+            encoding="utf-8",
+        )
+        results.append(RepairActionResult("Ostris portable", "guidance created", [guidance]))
+    return results
+
+
 def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[InstallCandidate]], report: HardwareReport) -> InstallerState:
-    """Run adult confirmation, privacy notice, profile, RunPod, and sample tests."""
+    """Run adult confirmation, privacy notice, profile, tiers, auth, and sample tests."""
 
     existing_state = read_json(INSTALLER_STATE_PATH)
     non_interactive = args.non_interactive
-    total_steps = 6
+    total_steps = 8
 
     render_step(1, total_steps, "Adult-use confirmation", "This app is for lawful, consenting adult workflows only.")
     if args.accept_adult:
@@ -1679,7 +2587,40 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
         border_style="green",
     ))
 
-    render_step(4, total_steps, "Optional RunPod setup", "Skip this if you only want local mode for now.")
+    render_step(4, total_steps, "Install tier and model plan", MINIMAL_TIER_DESCRIPTION)
+    tier, skip_models = choose_install_tier(args, non_interactive)
+    custom_ids = getattr(args, "custom_model", None) or []
+    plan = build_model_plan(tier, skip_models=skip_models, custom_ids=custom_ids)
+    render_model_plan(plan)
+    if plan.missing_metadata and not plan.skip_models and not getattr(args, "download_models", False):
+        missing = ", ".join(plan.missing_metadata)
+        CONSOLE.print(Panel(
+            f"Missing exact download metadata: {missing}\n"
+            "This is safe: use Skip Models to install the framework now, or fill settings/model_catalog.json before live downloads.",
+            title="Model metadata needed",
+            border_style="yellow",
+        ))
+        if not non_interactive:
+            skip_models = Confirm.ask("Use Skip Models for this install and open Model Downloader later?", default=True)
+            plan = build_model_plan(tier, skip_models=skip_models, custom_ids=custom_ids)
+            render_model_plan(plan)
+
+    render_step(5, total_steps, "Optional Hugging Face and RunPod setup", "HF is recommended for gated models; RunPod remains optional.")
+    hf_token: str | None = None
+    if getattr(args, "hf_token", None):
+        stored, message = store_hf_token(args.hf_token)
+        CONSOLE.print(("[green]" if stored else "[yellow]") + message + ("[/green]" if stored else "[/yellow]"))
+        hf_token = args.hf_token
+    elif plan.gated_models and not non_interactive:
+        configure_hf = Confirm.ask(
+            "Some selected models are gated. Enter a Hugging Face token now for full access?",
+            default=False,
+        )
+        if configure_hf:
+            hf_token = Prompt.ask("Hugging Face token", password=True).strip()
+            stored, message = store_hf_token(hf_token)
+            CONSOLE.print(("[green]" if stored else "[yellow]") + message + ("[/green]" if stored else "[/yellow]"))
+
     runpod_key: str | None = None
     if args.runpod_key:
         runpod_key = args.runpod_key.strip()
@@ -1691,11 +2632,27 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
     else:
         CONSOLE.print("[blue]RunPod setup skipped in non-interactive mode.[/blue]")
 
-    render_step(5, total_steps, "Write idempotent configuration", "Existing user values are preserved; missing defaults are filled in.")
-    run_with_status("Writing .env and app settings...", lambda: ensure_env_defaults(detections, profile, runpod_key=runpod_key))
-    run_with_status("Writing settings/futa_vision_settings.json...", lambda: write_app_settings(profile, detections))
+    render_step(6, total_steps, "Optional framework bootstrap", "Existing external ComfyUI/Ostris installs are reused; portable installs go under engines/.")
+    bootstrap_results = bootstrap_frameworks(args, detections, report)
+    render_repair_action_results(bootstrap_results)
+    refreshed_detections = scan_for_installs()
+    if refreshed_detections != detections:
+        detections = refreshed_detections
 
-    render_step(6, total_steps, "Sample image and short clip test", "This verifies writable outputs and local media dependencies.")
+    render_step(7, total_steps, "Write idempotent configuration", "Existing user values are preserved; missing defaults are filled in.")
+    run_with_status("Writing .env and app settings...", lambda: ensure_env_defaults(detections, profile, runpod_key=runpod_key))
+    merge_env_file({"FUTA_VISION_INSTALL_TIER": plan.tier, "FUTA_VISION_SKIP_MODELS": str(plan.skip_models).lower()})
+    run_with_status("Writing settings/futa_vision_settings.json...", lambda: write_app_settings(profile, detections))
+    comfyui_path = _first_detected_path(detections, "comfyui") or str(BUNDLED_COMFYUI_PATH)
+    if getattr(args, "download_models", False):
+        events = run_with_status("Downloading selected model plan...", lambda: download_models_for_plan(plan, comfyui_path=comfyui_path, token=hf_token))
+        for event in events:
+            CONSOLE.print(f"[blue]{event.get('message', event)}[/blue]")
+    else:
+        write_model_install_state(plan, comfyui_path=comfyui_path)
+        CONSOLE.print("[blue]Model downloads skipped for now. Open Settings → Model Downloader later.[/blue]")
+
+    render_step(8, total_steps, "Sample image, short clip, and sample characters", "This verifies writable outputs and quick-start assets.")
     if args.skip_sample_tests:
         image_path = existing_state.get("sample_image_path")
         clip_path = existing_state.get("sample_clip_path")
@@ -1719,10 +2676,14 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
         adult_confirmed=adult_confirmed,
         privacy_acknowledged=privacy_acknowledged,
         hardware_profile=profile.value,
+        install_tier=plan.tier,
+        skip_models=plan.skip_models,
         runpod_configured=bool(runpod_key or load_env_file().get("RUNPOD_API_KEY")),
         sample_image_path=image_path,
         sample_clip_path=clip_path,
         detected=detected_state,
+        model_plan=model_plan_to_dict(plan),
+        post_install_target="character_creator" if plan.tier == InstallTier.MINIMAL.value and not plan.skip_models else "model_downloader" if plan.skip_models else "welcome",
         warnings=all_warnings,
     )
     write_json(INSTALLER_STATE_PATH, json_safe(state))
@@ -1730,9 +2691,9 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
     CONSOLE.print(Panel(
         "[bold green]Installation successful! You can now launch Futa-Vision.[/bold green]\n"
         "Next steps:\n"
-        "1. Review any repair suggestions below.\n"
-        "2. Start the app with `python main.py` when you are ready.\n"
-        "3. Open the Setup tab and confirm hardware/cloud status before generation.\n"
+        "1. Launch Futa-Vision and use the Welcome / Character Creator quick start.\n"
+        "2. Open Settings → Model Downloader for missing or optional models.\n"
+        "3. Run Settings → Health Check and confirm the one-line summary.\n"
         "4. If anything looks off later, run `python installer.py repair`.",
         title="Wizard complete",
         border_style="green",
@@ -1771,6 +2732,52 @@ def command_test_samples(args: argparse.Namespace) -> int:
     CONSOLE.print(Panel(f"Sample image: {image}\nSample clip: {clip}", title="Sample tests", border_style="green"))
     for warning in warnings:
         CONSOLE.print(f"[yellow]Warning:[/yellow] {warning}")
+    return 0
+
+
+def command_models(args: argparse.Namespace) -> int:
+    """Show or download model catalog entries for a selected tier."""
+
+    ensure_project_directories()
+    ensure_model_catalog_example()
+    detections = scan_for_installs()
+    comfyui_path = _first_detected_path(detections, "comfyui") or str(BUNDLED_COMFYUI_PATH)
+    plan = build_model_plan(
+        getattr(args, "tier", None) or InstallTier.MINIMAL.value,
+        skip_models=bool(getattr(args, "skip_models", False)),
+        custom_ids=getattr(args, "custom_model", None) or [],
+    )
+    render_model_plan(plan)
+    if getattr(args, "download", False):
+        events = download_models_for_plan(plan, comfyui_path=comfyui_path, dry_run=False, token=getattr(args, "hf_token", None))
+    else:
+        events = download_models_for_plan(plan, comfyui_path=comfyui_path, dry_run=True, token=getattr(args, "hf_token", None))
+    for event in events:
+        CONSOLE.print(event.get("message", str(event)))
+    return 0
+
+
+def command_health_check(args: argparse.Namespace) -> int:
+    """Run the prominent installer health check."""
+
+    ensure_project_directories()
+    result = run_health_check()
+    render_health_check(result)
+    manifest = read_json(INSTALLER_MANIFEST_PATH) or default_installer_manifest()
+    manifest["health_check"] = {
+        "summary": result["summary"],
+        "status": result["status"],
+        "last_run_at": result["checked_at"],
+    }
+    write_json(INSTALLER_MANIFEST_PATH, manifest)
+    return 0
+
+
+def command_diagnostics_export(args: argparse.Namespace) -> int:
+    """Export a redacted diagnostics bundle."""
+
+    output = export_diagnostics()
+    CONSOLE.print(Panel(f"Diagnostics exported: {output}", title="Diagnostics", border_style="green"))
     return 0
 
 
@@ -1873,6 +2880,7 @@ def command_install(args: argparse.Namespace) -> int:
     render_header()
     directories = ensure_project_directories()
     ensure_env_example()
+    ensure_model_catalog_example()
     CONSOLE.print(f"[green]Folder layout ready:[/green] {len(directories)} directories created or verified under {ROOT}")
 
     detections = scan_for_installs()
@@ -1888,6 +2896,8 @@ def command_install(args: argparse.Namespace) -> int:
         "\n".join([
             "Installation successful! You can now launch Futa-Vision.",
             "Next step: run `python main.py` or use --launch to start automatically.",
+            "Post-install: Welcome screen -> Create your first futa partner.",
+            "Settings: open Model Downloader for missing models and run Health Check.",
             f"Installer state: {INSTALLER_STATE_PATH}",
             f"App settings: {APP_SETTINGS_PATH}",
             f"Installer manifest: {INSTALLER_MANIFEST_PATH}",
@@ -1913,10 +2923,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--accept-adult", action="store_true", help="Record adult-use confirmation for this local install.")
     parser.add_argument("--privacy-ack", action="store_true", help="Acknowledge the local/cloud privacy notice.")
     parser.add_argument("--profile", choices=[profile.value for profile in HardwareProfile], help="Override detected hardware profile.")
+    parser.add_argument("--tier", choices=[tier.value for tier in InstallTier], help="Install tier for model/framework planning. Minimal is the default.")
+    parser.add_argument("--skip-models", action="store_true", help="Framework-only escape hatch for limited disk or slow internet.")
+    parser.add_argument("--download-models", action="store_true", help="Download selected tier models after the pre-download summary.")
+    parser.add_argument("--custom-model", action="append", default=[], help="Model catalog id to include when --tier custom is selected.")
+    parser.add_argument("--hf-token", help="Optional Hugging Face token to store in OS keyring for gated models.")
     parser.add_argument("--runpod-key", help="Optional RunPod API key to write to .env.")
     parser.add_argument("--skip-sample-tests", action="store_true", help="Skip sample image and short clip tests.")
     parser.add_argument("--launch", action="store_true", help="Launch main.py automatically after a successful install.")
     parser.add_argument("--repair-mode", action="store_true", help="Open Repair Mode instead of the full installer wizard.")
+    parser.add_argument("--bootstrap-frameworks", action="store_true", help="Install missing portable ComfyUI/Ostris framework components when possible.")
+    parser.add_argument("--skip-framework-bootstrap", action="store_true", help="Do not install missing portable engines; detect and configure only.")
 
     detect = subparsers.add_parser("detect", help="Detect engines and hardware without writing wizard state.")
     detect.add_argument("--repair", action="store_true", help="Also print repair suggestions.")
@@ -1924,6 +2941,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     samples = subparsers.add_parser("test-samples", help="Create the installer sample image and short clip.")
     samples.set_defaults(func=command_test_samples)
+
+    models = subparsers.add_parser("models", help="Show or download model catalog entries with progress-ready events.")
+    models.add_argument("--tier", choices=[tier.value for tier in InstallTier], default=InstallTier.MINIMAL.value, help="Tier to summarize or download.")
+    models.add_argument("--skip-models", action="store_true", help="Show framework-only model skip state.")
+    models.add_argument("--custom-model", action="append", default=[], help="Model catalog id for custom tier.")
+    models.add_argument("--download", action="store_true", help="Perform live downloads. Without this flag, the command is a dry run.")
+    models.add_argument("--hf-token", help="Optional Hugging Face token for this download.")
+    models.set_defaults(func=command_models)
+
+    subparsers.add_parser("health-check", help="Run the prominent All Good / Needs Attention health check.").set_defaults(func=command_health_check)
+    subparsers.add_parser("diagnostics-export", help="Export a redacted diagnostics zip for troubleshooting.").set_defaults(func=command_diagnostics_export)
 
     repair = subparsers.add_parser("repair", help="Print setup repair suggestions and run safe repair actions.")
     repair.add_argument("--reset-cache", "--clear-cache", dest="reset_cache", action="store_true", help="Clear disposable cache/preview folders and recreate them.")

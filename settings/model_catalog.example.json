@@ -1,0 +1,154 @@
+{
+  "models": [
+    {
+      "category": "base",
+      "default_for_tier": [
+        "minimal",
+        "standard",
+        "full"
+      ],
+      "description": "Strong all-rounder base model for futa-on-male scenes and character starts.",
+      "destination": "models/checkpoints/pony_v7.safetensors",
+      "filename": "",
+      "gated": true,
+      "id": "pony_v7_base",
+      "name": "Pony V7",
+      "priority": 10,
+      "recommended_for": [
+        "best for futa anatomy",
+        "first partner creation",
+        "minimal install"
+      ],
+      "repo_id": "",
+      "size_gb": 6.5,
+      "strong_points": [
+        "strong all-rounder for futa-on-male",
+        "good anatomy consistency",
+        "solid style range"
+      ],
+      "tier": "minimal",
+      "weaknesses": [
+        "requires exact catalog metadata before automatic download",
+        "may need LoRA support for specialized slime physics"
+      ]
+    },
+    {
+      "category": "lora",
+      "default_for_tier": [
+        "minimal",
+        "standard",
+        "full"
+      ],
+      "description": "Project base LoRA for anatomy, contact, deformation, stretch, and motion consistency.",
+      "destination": "models/loras/general_physics_base.safetensors",
+      "filename": "",
+      "gated": false,
+      "id": "general_physics_base_lora",
+      "name": "General Physics Base LoRA",
+      "priority": 20,
+      "recommended_for": [
+        "good for slime physics",
+        "physics/anatomy baseline"
+      ],
+      "repo_id": "",
+      "size_gb": 0.25,
+      "strong_points": [
+        "good for slime physics",
+        "contact consistency",
+        "low-VRAM friendly"
+      ],
+      "tier": "minimal",
+      "weaknesses": [
+        "training/export path must provide real artifact metadata before download"
+      ]
+    },
+    {
+      "category": "samples",
+      "default_for_tier": [
+        "minimal",
+        "standard",
+        "full"
+      ],
+      "description": "Small local sample assets used by first-run validation and the quick-start flow.",
+      "destination": "library/sample_characters",
+      "filename": "",
+      "gated": false,
+      "id": "sample_characters",
+      "name": "Sample characters/assets",
+      "priority": 30,
+      "recommended_for": [
+        "first-run validation",
+        "create your first futa partner"
+      ],
+      "repo_id": "",
+      "size_gb": 0.1,
+      "strong_points": [
+        "fast validation",
+        "quick-start friendly"
+      ],
+      "tier": "minimal",
+      "weaknesses": [
+        "not production model weights"
+      ]
+    },
+    {
+      "category": "video",
+      "default_for_tier": [
+        "standard",
+        "full"
+      ],
+      "description": "Fast preview video model slot for short local clips.",
+      "destination": "models/diffusion_models/ltx_preview.safetensors",
+      "filename": "",
+      "gated": false,
+      "id": "ltx_preview_video",
+      "name": "LTX preview video model",
+      "priority": 40,
+      "recommended_for": [
+        "fast preview",
+        "low-VRAM friendly"
+      ],
+      "repo_id": "",
+      "size_gb": 4.0,
+      "strong_points": [
+        "fast preview",
+        "short clips"
+      ],
+      "tier": "standard",
+      "weaknesses": [
+        "not final-quality physics"
+      ]
+    },
+    {
+      "category": "video",
+      "default_for_tier": [
+        "full"
+      ],
+      "description": "Higher-quality final video model slot for physics-heavy clips.",
+      "destination": "models/diffusion_models/wan_final.safetensors",
+      "filename": "",
+      "gated": true,
+      "id": "wan_final_video",
+      "name": "Wan final video model",
+      "priority": 50,
+      "recommended_for": [
+        "high-quality final clips",
+        "cloud/offload"
+      ],
+      "repo_id": "",
+      "size_gb": 28.0,
+      "strong_points": [
+        "high-quality final clips",
+        "physics-heavy scenes"
+      ],
+      "tier": "full",
+      "weaknesses": [
+        "large download",
+        "cloud recommended on 8GB VRAM"
+      ]
+    }
+  ],
+  "notes": "Fill repo_id and filename before enabling live downloads for placeholder entries.",
+  "schema_version": "phase5.model_catalog.v1",
+  "updated_at": null
+}

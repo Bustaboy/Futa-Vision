@@ -11,10 +11,16 @@ htmlcov/
 .env
 .venv/
 venv/
+engines/
+settings/model_catalog.json
+settings/model_install_state.json
+settings/backups/
 
 # Runtime-generated media, logs, and indexes
 logs/*.log
 logs/*.jsonl
+logs/diagnostics/
 outputs/timelines/
 outputs/cloud_results/
 library/thumbnails/
+library/sample_characters/

@@ -28,6 +28,7 @@ import cloud_manager
 import character_creator
 import exporter
 import hardware_check
+import installer
 import library as character_library
 import regeneration_engine
 import timeline
@@ -731,6 +732,18 @@ def default_installer_manifest() -> dict[str, Any]:
         "sample_tests": {"last_run_at": None, "status": "not_run", "warnings": []},
         "last_sample_test_result": {"status": "not_run", "summary": "Sample media tests have not run yet.", "image_path": None, "clip_path": None, "warnings": []},
         "runpod": {"ready": False, "api_key_present": bool(os.getenv("RUNPOD_API_KEY")), "default_mode": "Auto"},
+        "model_downloads": {
+            "tier": "minimal",
+            "skip_models": False,
+            "minimal_definition": installer.MINIMAL_TIER_DESCRIPTION,
+            "total_size_gb": 0,
+            "models": [],
+            "missing_metadata": [],
+            "gated_models": [],
+            "status": "not_configured",
+        },
+        "post_install": {"next_screen": "welcome", "call_to_action": "Create your first futa partner"},
+        "health_check": {"summary": "Health Check has not run yet.", "status": "not_run", "last_run_at": None},
         "last_run_summary": {"status": "not_configured", "completed_at": None, "message": "Installer has not completed yet.", "warnings_count": 1, "log_path": str(INSTALLER_LOG_PATH)},
         "last_successful_installer_run": None,
         "overall_status": "not_configured",
@@ -901,6 +914,8 @@ def installer_status_markdown() -> str:
     sample_tests = manifest.get("sample_tests", {})
     last_sample = manifest.get("last_sample_test_result", {})
     runpod = manifest.get("runpod", {})
+    model_downloads = manifest.get("model_downloads", {})
+    health = manifest.get("health_check", {})
     last_run = manifest.get("last_run_summary", {})
     _state, _tone, attention = installation_state(manifest)
     manifest_note = ""
@@ -923,6 +938,9 @@ def installer_status_markdown() -> str:
 - Sample tests: `{sample_tests.get('status', 'not_run')}` (last run: `{sample_tests.get('last_run_at') or 'never'}`)
 - Last sample result: `{last_sample.get('summary', 'Sample media tests have not run yet.')}`
 - RunPod ready: `{runpod.get('ready', False)}` (API key present: `{runpod.get('api_key_present', False)}`)
+- Model tier: `{model_downloads.get('tier', 'minimal')}` (skip models: `{model_downloads.get('skip_models', False)}`, status: `{model_downloads.get('status', 'unknown')}`)
+- Minimal definition: {model_downloads.get('minimal_definition', installer.MINIMAL_TIER_DESCRIPTION)}
+- Health Check: `{health.get('summary', 'Health Check has not run yet.')}`
 - Installer log: `{INSTALLER_LOG_PATH}`
 
 ### Detected Paths
@@ -982,6 +1000,121 @@ def run_installer_repair_from_ui() -> tuple[str, str]:
         return settings_markdown(), "✅ Installer / repair completed successfully. Settings were refreshed. Run `python installer.py test-samples` any time for a quick verification.\n\n" + output[-12000:]
     LOGGER.error("Installer exited with code %s from Settings tab", completed.returncode)
     return settings_markdown(), f"❌ Installer exited with code {completed.returncode}. Review logs/installer.log, then rerun repair or setup.bat. Quick verification after fixing: `python installer.py test-samples`.\n\n{output[-12000:]}"
+
+
+def model_downloader_markdown(search_text: str = "", category: str = "all", tier: str = "minimal") -> str:
+    """Render the Settings-tab Model Downloader catalog view."""
+
+    catalog = installer.load_model_catalog()
+    query = (search_text or "").strip().lower()
+    normalized_category = (category or "all").strip().lower()
+    plan = installer.build_model_plan(tier or "minimal", catalog=catalog)
+    manifest = load_installer_manifest()
+    comfyui_path = manifest.get("detected_paths", {}).get("comfyui")
+    rows: list[str] = []
+    for entry in catalog:
+        searchable = " ".join([
+            entry.name,
+            entry.description,
+            entry.category,
+            " ".join(entry.strong_points),
+            " ".join(entry.weaknesses),
+            " ".join(entry.recommended_for),
+        ]).lower()
+        if query and query not in searchable:
+            continue
+        if normalized_category != "all" and entry.category.lower() != normalized_category:
+            continue
+        status = installer.model_install_status(entry, comfyui_path)
+        defaults = ", ".join(entry.default_for_tier) or "custom"
+        recommended = ", ".join(entry.recommended_for) or "general use"
+        strengths = ", ".join(entry.strong_points) or "not documented"
+        weaknesses = ", ".join(entry.weaknesses) or "not documented"
+        rows.append(
+            f"- **{entry.name}** (`{status['status']}`, {entry.size_gb:g} GB, `{entry.category}`, defaults: `{defaults}`)\n"
+            f"  Description: {entry.description}\n"
+            f"  Strong points: {strengths}\n"
+            f"  Weaknesses: {weaknesses}\n"
+            f"  Recommended for: {recommended}\n"
+            f"  Destination: `{status['path']}`"
+        )
+    if not rows:
+        rows.append("- No catalog entries match the current search/filter.")
+    tier_note = f"Selected tier `{plan.tier}` estimates `{plan.total_size_gb:g} GB` across `{len(plan.entries)}` entries."
+    if plan.missing_metadata:
+        tier_note += f" Live download blocked for: `{', '.join(plan.missing_metadata)}`."
+    return "\n\n".join([
+        "## Model Downloader",
+        installer.MINIMAL_TIER_DESCRIPTION,
+        "Use **Skip Models** when disk space is tight or internet is slow; the framework stays usable and Health Check will mark models as missing.",
+        tier_note,
+        "### Catalog",
+        *rows,
+    ])
+
+
+def preview_model_tier_from_ui(tier: str, skip_models: bool) -> tuple[str, str]:
+    """Preview a model tier and return catalog Markdown plus dry-run progress text."""
+
+    plan = installer.build_model_plan(tier or "minimal", skip_models=bool(skip_models))
+    events = installer.download_models_for_plan(plan, dry_run=True)
+    progress_text = "\n".join(event.get("message", str(event)) for event in events)
+    return model_downloader_markdown("", "all", plan.tier), progress_text or "No model downloads selected."
+
+
+def download_model_tier_from_ui(tier: str, skip_models: bool) -> tuple[str, str]:
+    """Download the selected model tier from the Settings tab."""
+
+    plan = installer.build_model_plan(tier or "minimal", skip_models=bool(skip_models))
+    try:
+        events = installer.download_models_for_plan(plan, dry_run=False)
+    except Exception as exc:  # noqa: BLE001 - keep UI responsive and actionable.
+        LOGGER.exception("Model download failed from Settings")
+        return model_downloader_markdown("", "all", plan.tier), f"❌ Model download could not start: {exc}"
+    progress_text = "\n".join(event.get("message", str(event)) for event in events)
+    return model_downloader_markdown("", "all", plan.tier), progress_text or "No model downloads selected."
+
+
+def save_hf_token_from_ui(hf_token: str) -> tuple[str, str]:
+    """Store a Hugging Face token for gated model downloads."""
+
+    stored, message = installer.store_hf_token(hf_token)
+    prefix = "✅" if stored else "⚠️"
+    return settings_markdown(), f"{prefix} {message}"
+
+
+def test_hf_access_from_ui(hf_token: str) -> str:
+    """Test Hugging Face access from Settings without crashing the app."""
+
+    status, message = installer.test_hf_token_access(hf_token.strip() or None)
+    prefix = "✅" if status == "ready" else "⚠️"
+    return f"{prefix} {message}"
+
+
+def run_health_check_from_ui() -> tuple[str, str]:
+    """Run prominent Health Check and refresh Settings status."""
+
+    result = installer.run_health_check()
+    manifest = load_installer_manifest()
+    manifest["health_check"] = {
+        "summary": result["summary"],
+        "status": result["status"],
+        "last_run_at": result["checked_at"],
+    }
+    INSTALLER_MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    INSTALLER_MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    return settings_markdown(), installer.render_health_markdown(result)
+
+
+def export_diagnostics_from_ui() -> str:
+    """Create a redacted diagnostics bundle from Settings."""
+
+    try:
+        output = installer.export_diagnostics()
+    except Exception as exc:  # noqa: BLE001 - diagnostics should return a readable UI error.
+        LOGGER.exception("Diagnostics export failed")
+        return f"❌ Diagnostics export failed: {exc}"
+    return f"✅ Diagnostics exported: `{output}`"
 
 
 def settings_markdown() -> str:
@@ -1045,12 +1178,27 @@ def phase0_test_markdown() -> str:
 """.strip()
 
 
+def post_install_start_tab(initial_interactive: bool) -> str:
+    """Choose the first visible tab after install."""
+
+    if not initial_interactive:
+        return "Setup"
+    manifest = load_installer_manifest()
+    target = manifest.get("post_install", {}).get("next_screen")
+    if target == "character_creator":
+        return "Welcome"
+    if target == "model_downloader":
+        return "Settings"
+    return "Setup"
+
+
 def build_ui() -> gr.Blocks:
     """Construct the Gradio 5.x tabbed interface."""
 
     require_adult_confirmation = adult_confirmation_required()
     initial_confirmed = not require_adult_confirmation
     initial_interactive = initial_confirmed
+    initial_tab = post_install_start_tab(initial_interactive)
 
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
@@ -1074,7 +1222,15 @@ def build_ui() -> gr.Blocks:
             visible=not initial_interactive,
         )
 
-        with gr.Tabs() as app_tabs:
+        with gr.Tabs(selected=initial_tab) as app_tabs:
+            with gr.Tab("Welcome", id="Welcome", visible=initial_interactive) as welcome_tab:
+                gr.Markdown(
+                    "## Welcome / Quick Start\n"
+                    "Create your first futa partner with the Minimal setup: Pony V7, General Physics Base LoRA, and sample characters once models are installed. "
+                    "Run Health Check from Settings first if the installer reports missing models or metadata."
+                )
+                welcome_cta = gr.Button("Create your first futa partner", variant="primary", interactive=initial_interactive)
+
             with gr.Tab("Setup", id="Setup"):
                 confirmation_status = gr.Markdown(adult_confirmation_status(initial_confirmed))
                 setup_output = gr.Markdown()
@@ -1157,11 +1313,47 @@ def build_ui() -> gr.Blocks:
                     save_settings_button = gr.Button("Save Settings", variant="primary")
                     refresh_settings_button = gr.Button("Refresh Settings", variant="secondary")
                     run_installer_button = gr.Button("🚀 Run Installer / Repair Installation (Recommended)", variant="primary", size="lg")
+                    health_check_button = gr.Button("Health Check", variant="primary", size="lg")
                 gr.Markdown(
                     "**Recommended for first run. Repair is safe to run repeatedly.** It refreshes folders, paths, sample-test status, and the installer manifest without deleting outputs. "
                     "It may take several minutes if dependencies or hardware checks are slow. When it finishes, this status should turn green; you can also run `python installer.py test-samples` as a quick verification."
                 )
                 installer_run_output = gr.Textbox(label="Installer / Repair Output", lines=12, max_lines=18, interactive=False)
+                health_check_output = gr.Markdown(label="Health Check")
+                with gr.Accordion("Hugging Face login for gated models", open=True):
+                    settings_hf_token = gr.Textbox(
+                        label="Hugging Face token (stored in OS keyring when possible)",
+                        type="password",
+                        placeholder="Optional; needed for gated model downloads",
+                    )
+                    with gr.Row():
+                        save_hf_button = gr.Button("Login to Hugging Face", variant="primary")
+                        test_hf_button = gr.Button("Test HF Access", variant="secondary")
+                    hf_status_output = gr.Markdown()
+                with gr.Accordion("Model Downloader", open=True):
+                    gr.Markdown(
+                        "Search model catalog entries, compare strengths/weaknesses, preview tier size estimates, and download models with progress feedback. "
+                        "Skip Models is valid for slow internet or limited disk space."
+                    )
+                    with gr.Row():
+                        model_search = gr.Textbox(label="Search", placeholder="futa anatomy, slime physics, fast preview")
+                        model_category = gr.Dropdown(["all", "base", "lora", "samples", "video", "upscale"], value="all", label="Category")
+                        model_tier = gr.Radio(["minimal", "standard", "full", "custom"], value="minimal", label="Tier")
+                        model_skip = gr.Checkbox(label="Skip Models / framework only", value=False)
+                    model_catalog_output = gr.Markdown(model_downloader_markdown())
+                    model_progress_output = gr.Textbox(
+                        label="Download Progress",
+                        lines=8,
+                        max_lines=14,
+                        interactive=False,
+                        placeholder="Progress bars show current file, size, speed, ETA, and status during live downloads.",
+                    )
+                    with gr.Row():
+                        preview_model_tier_button = gr.Button("Preview Tier", variant="secondary")
+                        download_model_tier_button = gr.Button("Download Tier", variant="primary")
+                with gr.Accordion("Diagnostics", open=False):
+                    diagnostics_button = gr.Button("Export Diagnostics", variant="secondary")
+                    diagnostics_output = gr.Markdown()
                 settings_json = gr.Code(label="Settings JSON (secrets redacted in display)", language="json")
                 save_settings_button.click(
                     save_app_settings,
@@ -1171,6 +1363,15 @@ def build_ui() -> gr.Blocks:
                 )
                 refresh_settings_button.click(settings_markdown, outputs=settings_status)
                 run_installer_button.click(run_installer_repair_from_ui, outputs=[settings_status, installer_run_output], show_progress="full")
+                health_check_button.click(run_health_check_from_ui, outputs=[settings_status, health_check_output], show_progress="full")
+                save_hf_button.click(save_hf_token_from_ui, inputs=settings_hf_token, outputs=[settings_status, hf_status_output], show_progress="full")
+                test_hf_button.click(test_hf_access_from_ui, inputs=settings_hf_token, outputs=hf_status_output, show_progress="full")
+                for trigger in (model_search.change, model_category.change, model_tier.change):
+                    trigger(model_downloader_markdown, inputs=[model_search, model_category, model_tier], outputs=model_catalog_output)
+                model_skip.change(model_downloader_markdown, inputs=[model_search, model_category, model_tier], outputs=model_catalog_output)
+                preview_model_tier_button.click(preview_model_tier_from_ui, inputs=[model_tier, model_skip], outputs=[model_catalog_output, model_progress_output], show_progress="full")
+                download_model_tier_button.click(download_model_tier_from_ui, inputs=[model_tier, model_skip], outputs=[model_catalog_output, model_progress_output], show_progress="full")
+                diagnostics_button.click(export_diagnostics_from_ui, outputs=diagnostics_output, show_progress="full")
 
             with gr.Tab("Train General Physics LoRA", id="Train General Physics LoRA", visible=initial_interactive) as training_tab:
                 gr.Markdown(
@@ -1392,6 +1593,8 @@ def build_ui() -> gr.Blocks:
                     show_progress="full",
                 )
 
+        welcome_cta.click(lambda: gr.update(selected="Character Creator"), outputs=app_tabs)
+
         def _gate_update(confirmed: bool) -> list[Any]:
             unlocked = confirmed or not adult_confirmation_required()
             return [
@@ -1403,7 +1606,9 @@ def build_ui() -> gr.Blocks:
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
-                gr.update(selected="Setup" if not unlocked else "Character Library"),
+                gr.update(visible=unlocked),
+                gr.update(selected="Setup" if not unlocked else "Welcome"),
+                gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
@@ -1424,6 +1629,7 @@ def build_ui() -> gr.Blocks:
             outputs=[
                 confirmation_status,
                 adult_gate_banner,
+                welcome_tab,
                 training_tab,
                 library_tab,
                 character_creator_tab,
@@ -1431,6 +1637,7 @@ def build_ui() -> gr.Blocks:
                 generate_tab,
                 timeline_tab,
                 app_tabs,
+                welcome_cta,
                 start_training,
                 use_scene_button,
                 create_partner_shortcut,

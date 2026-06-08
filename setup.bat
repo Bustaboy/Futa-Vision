@@ -18,6 +18,13 @@ echo   3. Run the Phase 5 installer / repair checks
 echo   4. Offer to launch the Gradio app in your browser
 echo   5. Print a simple sample verification command for later
 echo.
+echo Minimal (Recommended, ~6-10 GB):
+echo   Ostris portable, ComfyUI + essential nodes, Pony V7,
+echo   General Physics Base LoRA, and sample characters.
+echo.
+echo If disk space or internet speed is limited, choose Skip Models
+echo in the installer and use Settings ^> Model Downloader later.
+echo.
 echo RTX 4070 8GB note: setup uses safe local defaults: 720p,
 echo batch size 1, VRAM safety, and RunPod prompts for heavy jobs.
 echo.
@@ -136,9 +143,9 @@ echo   Installation completed successfully!
 echo ============================================================
 echo.
 echo Next steps:
-echo   1. Launch Futa-Vision and open the Settings tab.
-echo   2. Confirm the Phase 5 Installer Status looks green/ready.
-echo   3. If ComfyUI or Ostris paths are missing, install or set them and run Repair.
+echo   1. Launch Futa-Vision and open the Welcome or Settings tab.
+echo   2. Run Health Check and read the one-line summary.
+echo   3. Open Model Downloader for missing/optional models.
 echo   4. Start with RTX 4070 8GB Safe presets before trying heavier jobs.
 echo.
 echo Launch command for later:

@@ -12,6 +12,8 @@ The canonical project source document is available at:
 
 Futa-Vision now includes a beginner-friendly Phase 5 installer. The installer is safe to rerun: it creates required folders, detects ComfyUI/Ostris/Pinokio when present, writes `settings/installer_manifest.json`, runs sample media checks, and keeps existing outputs/library files intact.
 
+**Minimal (Recommended, ~6-10 GB)** means: Ostris portable, ComfyUI + essential nodes, Pony V7 (strong all-rounder for futa-on-male), General Physics Base LoRA, and sample characters. If you have limited disk space or slow internet, choose **Skip Models** to install only the framework first, then use **Settings → Model Downloader** later.
+
 ### Option A — Recommended Windows setup.bat
 
 1. Install **Python 3.12 or newer** from <https://www.python.org/downloads/windows/>. During installation, enable **Add python.exe to PATH**.
@@ -20,10 +22,11 @@ Futa-Vision now includes a beginner-friendly Phase 5 installer. The installer is
    - finds Python,
    - updates `pip`,
    - installs `requirements.txt`,
-   - runs the Phase 5 installer/repair checks,
+   - runs the Phase 5 installer/repair checks with Minimal as the recommended tier,
    - runs a quick sample verification,
    - offers to launch the Gradio app.
-4. When the app opens, go to **⚙️ Settings** and confirm **Phase 5 Installer Status** is green. If it is yellow or red, click **🚀 Run Installer / Repair Installation (Recommended)**.
+4. When the app opens, go to **⚙️ Settings** and run **Health Check**. The top line should say **All systems ready** or explain what needs attention, such as missing models.
+5. Use **Settings → Model Downloader** to search models by category, read strengths/weaknesses/recommended use cases, and download missing models with progress feedback.
 
 ### Option B — Pinokio recipe
 
@@ -51,6 +54,10 @@ Optional manual commands:
 ```bash
 python installer.py detect --repair
 python installer.py repair --all
+python installer.py models --tier minimal
+python installer.py models --tier minimal --download
+python installer.py health-check
+python installer.py diagnostics-export
 ```
 
 ### First-run verification
