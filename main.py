@@ -1200,7 +1200,7 @@ def build_ui() -> gr.Blocks:
     initial_interactive = initial_confirmed
     initial_tab = post_install_start_tab(initial_interactive)
 
-    with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title=APP_TITLE) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
             "Phase 5: guided installer, VRAM-safe setup, settings polish, and beginner-friendly repair tools."
@@ -1433,7 +1433,10 @@ def build_ui() -> gr.Blocks:
                 create_partner_shortcut = gr.Button("Create New Partner", variant="primary", interactive=initial_interactive)
                 create_partner_shortcut.click(lambda: gr.update(selected="Create Partner"), outputs=app_tabs)
 
-            character_creator_components = character_creator.build_character_creator_tab(initial_interactive=initial_interactive)
+            character_creator_components = character_creator.build_character_creator_tab(
+                initial_interactive=initial_interactive,
+                scoring_targets={"_defer_binding": True},
+            )
             character_creator_tab = character_creator_components["tab"]
 
             with gr.Tab("Create Partner", id="Create Partner", visible=initial_interactive) as partner_tab:
@@ -1463,6 +1466,16 @@ def build_ui() -> gr.Blocks:
                     score_partner_batch,
                     inputs=[anatomy, physics, style, prior_scores, character_name, trigger_word, tag_text, partner_prompt, base_image, save_as_fixed_male, allow_fixed_male_overwrite],
                     outputs=[score_output, generated_scores, registration_json],
+                )
+                character_creator.attach_scoring_handoff(
+                    character_creator_components,
+                    {
+                        "partner_prompt": partner_prompt,
+                        "character_name": character_name,
+                        "trigger_word": trigger_word,
+                        "tag_text": tag_text,
+                        "prior_scores": prior_scores,
+                    },
                 )
 
             with gr.Tab("Generate Video", id="Generate Video", visible=initial_interactive) as generate_tab:
@@ -1662,7 +1675,7 @@ def main() -> None:
     paths = load_paths()
     ensure_storage(paths)
     demo = build_ui()
-    demo.launch(server_name="127.0.0.1", server_port=7860)
+    demo.launch(server_name="127.0.0.1", server_port=7860, theme=gr.themes.Soft())
 
 
 if __name__ == "__main__":
