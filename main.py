@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 import chat_parser
 import cloud_manager
+import exporter
 import hardware_check
 import library as character_library
 import regeneration_engine
@@ -185,7 +186,7 @@ def setup_status() -> str:
         "- Phase 1: SQLite character library, searchable thumbnails, scoring-to-library registration, and scene load plans.",
         "- TODO Phase 1: replace placeholder partner LoRA staging with real Ostris partner datasets/jobs once starter image generation lands.",
         "- TODO Phase 2: add ComfyUI extension checks for IPAdapter, AnimateDiff, Wan extender, LTX, Regional ControlNets, and LayerDiffuse plus RunPod preflight manifests.",
-        "- TODO Phase 2: implement video pipeline submission, clip auto-review, extension, timeline assembly, and final upscaling.",
+        "- Phase 4.2: final export sidecars, metadata, optional audio-track intent, settings polish, and 1080p+ upscale plan.",
     ]
     return "\n".join(lines)
 
@@ -545,6 +546,54 @@ def disconnect_runpod_pod() -> str:
     return "## RunPod disconnect requested\n```json\n" + json.dumps(status.to_dict(), indent=2) + "\n```"
 
 
+
+def settings_preview_markdown(
+    runpod_api_key: str,
+    default_cloud_mode: str,
+    performance_preset: str,
+    vram_safety_enabled: bool,
+    require_age_gate: bool,
+    theme_name: str,
+) -> str:
+    """Render Phase 4.2 Settings tab preferences with safe secret handling."""
+
+    return exporter.settings_summary(
+        runpod_api_key=runpod_api_key,
+        default_cloud_mode=default_cloud_mode,
+        performance_preset=performance_preset,
+        vram_safety_enabled=vram_safety_enabled,
+        require_age_gate=require_age_gate,
+        theme_name=theme_name,
+    )
+
+
+def run_final_export(
+    export_source_path: str,
+    timeline_state_json: str,
+    selected_character_ids: str,
+    scene_prompt: str,
+    performance_preset: str,
+    upscale_engine: str,
+    include_audio: bool,
+    audio_path: str | None,
+    cloud_mode: str,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[str, str, str | None]:
+    """Launch the Phase 4.2 final export from Gradio."""
+
+    return exporter.gradio_create_final_export(
+        input_video_path=export_source_path,
+        timeline_state_json=timeline_state_json,
+        selected_character_ids=selected_character_ids,
+        scene_prompt=scene_prompt,
+        performance_preset=performance_preset,
+        upscale_engine=upscale_engine,
+        include_audio=include_audio,
+        audio_path=audio_path,
+        cloud_mode=cloud_mode,
+        progress=progress,
+    )
+
 def phase0_test_markdown() -> str:
     """Return README-equivalent quick test instructions inside the app."""
 
@@ -569,7 +618,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 3.2: LLM chat parser previews structured timeline edit intents."
+            "Phase 4.2: final polish, high-quality export metadata, settings, and 4070-safe upscale flow."
         )
         gr.Markdown(
             "# ⚠️ NSFW / Adult Content Disclaimer\n"
@@ -591,14 +640,14 @@ def build_ui() -> gr.Blocks:
                 confirmation_status = gr.Markdown(adult_confirmation_status(initial_confirmed))
                 setup_output = gr.Markdown()
                 refresh_setup = gr.Button("Refresh setup paths and TODOs", variant="secondary")
-                refresh_setup.click(setup_status, outputs=setup_output)
+                refresh_setup.click(setup_status, outputs=setup_output, show_progress="full")
                 demo.load(setup_status, outputs=setup_output)
 
                 gr.Markdown("## Live Hardware Status")
                 gr.Markdown("This section calls `hardware_check.collect_hardware_report()` and displays the full Markdown report.")
                 hardware_output = gr.Markdown()
                 refresh_hardware = gr.Button("Refresh Hardware Status", variant="primary")
-                refresh_hardware.click(hardware_status_markdown, outputs=hardware_output)
+                refresh_hardware.click(hardware_status_markdown, outputs=hardware_output, show_progress="full")
                 demo.load(hardware_status_markdown, outputs=hardware_output)
 
                 gr.Markdown("## Phase 4.1 Cloud / Hybrid Mode")
@@ -609,16 +658,45 @@ def build_ui() -> gr.Blocks:
                     launch_cloud_pod = gr.Button("One-click Launch RunPod Pod", variant="primary")
                     disconnect_cloud_pod = gr.Button("Disconnect / Terminate RunPod Pod", variant="stop")
                 setup_cloud_mode.change(cloud_status_for_mode, inputs=setup_cloud_mode, outputs=cloud_status_output)
-                refresh_cloud_status.click(refresh_runpod_status, outputs=cloud_status_output)
-                launch_cloud_pod.click(launch_runpod_pod, outputs=cloud_status_output)
-                disconnect_cloud_pod.click(disconnect_runpod_pod, outputs=cloud_status_output)
+                refresh_cloud_status.click(refresh_runpod_status, outputs=cloud_status_output, show_progress="full")
+                launch_cloud_pod.click(launch_runpod_pod, outputs=cloud_status_output, show_progress="full")
+                disconnect_cloud_pod.click(disconnect_runpod_pod, outputs=cloud_status_output, show_progress="full")
                 demo.load(lambda: cloud_status_for_mode(hardware_check.DEFAULT_CLOUD_MODE), outputs=cloud_status_output)
 
                 training_defaults_output = gr.Markdown()
                 refresh_training_defaults = gr.Button("Refresh Phase 0.5 training defaults", variant="secondary")
-                refresh_training_defaults.click(training_defaults_markdown, outputs=training_defaults_output)
+                refresh_training_defaults.click(training_defaults_markdown, outputs=training_defaults_output, show_progress="full")
                 demo.load(training_defaults_markdown, outputs=training_defaults_output)
                 gr.Markdown(phase0_test_markdown())
+
+            with gr.Tab("⚙️ Settings", id="Settings") as settings_tab:
+                gr.Markdown(
+                    "Phase 4.2 settings polish: cloud preferences, 4070 8GB performance presets, "
+                    "adult-content gate finalization, and general UI preferences. Secrets are previewed/masked here; "
+                    "put persistent credentials in `.env`."
+                )
+                with gr.Row():
+                    settings_runpod_key = gr.Textbox(label="RunPod API key (masked preview only)", type="password")
+                    settings_default_cloud = gr.Radio(hardware_check.CLOUD_MODE_OPTIONS, value=hardware_check.DEFAULT_CLOUD_MODE, label="Default cloud mode")
+                with gr.Row():
+                    settings_performance = gr.Dropdown(
+                        choices=list(exporter.PERFORMANCE_PRESETS.keys()),
+                        value="4070 Safe 720p → 1080p export",
+                        label="Performance preset",
+                    )
+                    settings_theme = gr.Dropdown(choices=exporter.GENERAL_THEME_OPTIONS, value="Soft", label="UI theme preference")
+                with gr.Row():
+                    settings_vram_safety = gr.Checkbox(label="Enable VRAM safety guardrails for RTX 4070 8GB", value=True)
+                    settings_age_gate = gr.Checkbox(label="Require NSFW disclaimer / age gate on launch", value=require_adult_confirmation)
+                settings_save = gr.Button("Preview / Apply session settings", variant="primary")
+                settings_status = gr.Markdown()
+                settings_save.click(
+                    settings_preview_markdown,
+                    inputs=[settings_runpod_key, settings_default_cloud, settings_performance, settings_vram_safety, settings_age_gate, settings_theme],
+                    outputs=settings_status,
+                    show_progress="full",
+                )
+
 
             with gr.Tab("Train General Physics LoRA", id="Train General Physics LoRA", visible=initial_interactive) as training_tab:
                 gr.Markdown(
@@ -627,7 +705,7 @@ def build_ui() -> gr.Blocks:
                 )
                 dataset_status = gr.Markdown()
                 refresh_dataset = gr.Button("Create/Refresh bundled neutral dataset", variant="secondary")
-                refresh_dataset.click(ensure_general_physics_dataset_status, outputs=dataset_status)
+                refresh_dataset.click(ensure_general_physics_dataset_status, outputs=dataset_status, show_progress="full")
                 demo.load(ensure_general_physics_dataset_status, outputs=dataset_status)
                 use_bundled_dataset = gr.Checkbox(label="Use bundled neutral physics dataset", value=True)
                 uploaded_dataset = gr.Files(label="Optional user dataset images", file_types=["image"], type="filepath")
@@ -647,6 +725,7 @@ def build_ui() -> gr.Blocks:
                     start_general_physics_training,
                     inputs=[use_bundled_dataset, uploaded_dataset, dataset_path, output_dir, train_rank, train_epochs, train_lr, use_low_vram],
                     outputs=[training_status, training_logs, training_artifact],
+                    show_progress="full",
                 )
 
             with gr.Tab("Character Library", id="Character Library", visible=initial_interactive) as library_tab:
@@ -722,7 +801,7 @@ def build_ui() -> gr.Blocks:
                 selected_preview_gallery = gr.Gallery(label="Selected character preview", columns=4, height=220)
                 selected_preview_status = gr.Markdown()
                 selected_partners.change(preview_scene_characters, inputs=selected_partners, outputs=[selected_preview_gallery, selected_preview_status])
-                preview_characters.click(preview_scene_characters, inputs=selected_partners, outputs=[selected_preview_gallery, selected_preview_status])
+                preview_characters.click(preview_scene_characters, inputs=selected_partners, outputs=[selected_preview_gallery, selected_preview_status], show_progress="full")
                 scene_type = gr.Radio(["single", "threesome", "gangbang"], value="single", label="Scene layout")
                 pipeline = gr.Radio(["LTX for speed", "Wan for physics"], value="LTX for speed", label="Pipeline selector")
                 with gr.Row():
@@ -741,7 +820,7 @@ def build_ui() -> gr.Blocks:
                 plan_output = gr.Markdown()
                 pipeline_json = gr.Code(label="Pipeline result / manifest", language="json")
                 final_video_file = gr.File(label="Final upscaled video placeholder")
-                generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, cloud_mode], outputs=plan_output)
+                generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, cloud_mode], outputs=plan_output, show_progress="full")
 
             with gr.Tab("🎬 Timeline & Edit", id="Timeline & Edit", visible=initial_interactive) as timeline_tab:
                 gr.Markdown(
@@ -754,6 +833,7 @@ def build_ui() -> gr.Blocks:
                     run_video_generation_pipeline,
                     inputs=[scene_prompt, selected_partners, scene_type, pipeline, duration, target_duration, cloud_mode, cloud_upload_confirmed, timeline_components["state_json"]],
                     outputs=[plan_output, pipeline_json, final_video_file, timeline_components["state_json"]],
+                    show_progress="full",
                 )
                 gr.Markdown(
                     "## Phase 3.2 Parser + Phase 3.3 Targeted Regeneration\n"
@@ -791,6 +871,48 @@ def build_ui() -> gr.Blocks:
                     show_progress="full",
                 )
 
+            with gr.Tab("🚀 Export", id="Export", visible=initial_interactive) as export_tab:
+                gr.Markdown(
+                    "Phase 4.2 final export: create a high-quality MP4 package with character/settings/version metadata, "
+                    "optional basic audio-track support, and a final 1080p+ upscale pass using SeedVR 2.5, RTX Video SR, or Nomos2. "
+                    "For RTX 4070 8GB, keep generation at 720p and only upscale this final assembled export."
+                )
+                export_source_path = gr.Textbox(
+                    label="Final assembled video path",
+                    placeholder="outputs/final_videos/final_upscale_...mp4 (or leave blank to use the timeline preview/first clip)",
+                )
+                with gr.Row():
+                    export_preset = gr.Dropdown(
+                        choices=list(exporter.PERFORMANCE_PRESETS.keys()),
+                        value="4070 Safe 720p → 1080p export",
+                        label="Export/performance preset",
+                    )
+                    export_upscaler = gr.Radio(exporter.UPSCALE_ENGINES, value="SeedVR 2.5", label="Final upscale engine")
+                with gr.Row():
+                    export_include_audio = gr.Checkbox(label="Attach optional audio track", value=False)
+                    export_audio_path = gr.Audio(label="Optional audio track", type="filepath")
+                export_button = gr.Button("Create Final Export", variant="primary", interactive=initial_interactive)
+                export_status = gr.Markdown()
+                export_json = gr.Code(label="Final export manifest / metadata", language="json")
+                export_file = gr.File(label="Download final MP4 export")
+                export_button.click(
+                    run_final_export,
+                    inputs=[
+                        export_source_path,
+                        timeline_components["state_json"],
+                        selected_partners,
+                        scene_prompt,
+                        export_preset,
+                        export_upscaler,
+                        export_include_audio,
+                        export_audio_path,
+                        cloud_mode,
+                    ],
+                    outputs=[export_status, export_json, export_file],
+                    show_progress="full",
+                )
+
+
         def _gate_update(confirmed: bool) -> list[Any]:
             unlocked = confirmed or not adult_confirmation_required()
             return [
@@ -801,7 +923,9 @@ def build_ui() -> gr.Blocks:
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
+                gr.update(visible=unlocked),
                 gr.update(selected="Setup" if not unlocked else "Character Library"),
+                gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
@@ -825,6 +949,7 @@ def build_ui() -> gr.Blocks:
                 partner_tab,
                 generate_tab,
                 timeline_tab,
+                export_tab,
                 app_tabs,
                 start_training,
                 use_scene_button,
@@ -835,6 +960,7 @@ def build_ui() -> gr.Blocks:
                 preview_characters,
                 chat_button,
                 apply_regeneration_button,
+                export_button,
                 *timeline_components["gated_controls"],
             ],
         )
