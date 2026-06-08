@@ -21,6 +21,7 @@ import gradio as gr
 from dotenv import load_dotenv
 
 import chat_parser
+import cloud_manager
 import hardware_check
 import library as character_library
 import regeneration_engine
@@ -144,6 +145,8 @@ def ensure_storage(paths: AppPaths) -> None:
         paths.outputs_dir / "timelines" / "previews",
         paths.outputs_dir / "timelines" / "thumbnails",
         paths.outputs_dir / "timelines" / "frames",
+        paths.outputs_dir / "cloud_jobs",
+        paths.outputs_dir / "cloud_jobs" / "downloads",
         paths.workflows_dir / "comfy",
         paths.workflows_dir / "ostris",
         paths.logs_dir,
@@ -151,6 +154,30 @@ def ensure_storage(paths: AppPaths) -> None:
     ]
     for folder in folders:
         folder.mkdir(parents=True, exist_ok=True)
+
+
+def cloud_status_markdown() -> str:
+    """Collect and render live RunPod/Hybrid status for Setup and Generate tabs."""
+
+    return cloud_manager.status_markdown()
+
+
+def launch_cloud_pod() -> tuple[str, str]:
+    """One-click RunPod launch wrapper for Gradio."""
+
+    return cloud_manager.gradio_launch_pod()
+
+
+def check_cloud_status() -> tuple[str, str]:
+    """Refresh RunPod status for Gradio."""
+
+    return cloud_manager.gradio_check_status()
+
+
+def disconnect_cloud_pod() -> tuple[str, str]:
+    """Disconnect/terminate the current RunPod pod for Gradio."""
+
+    return cloud_manager.gradio_disconnect()
 
 
 def hardware_status_markdown() -> str:
@@ -294,12 +321,13 @@ def build_generation_plan(
     selected_partners: str,
     pipeline: str,
     duration_seconds: int,
-    use_runpod: bool,
+    cloud_mode: str,
 ) -> str:
     """Create a hardware-aware Phase 2 preview plan without launching generation."""
 
     settings = hardware_check.get_low_vram_settings()
-    mode = "RunPod cloud offload" if use_runpod else settings["mode"]
+    normalized_cloud_mode = cloud_manager.normalize_cloud_mode(cloud_mode)
+    mode = f"{settings['mode']} + Phase 4.1 {normalized_cloud_mode} hybrid"
     normalized_pipeline = "wan" if pipeline.lower().startswith("wan") else "ltx"
     plan = {
         "mode": mode,
@@ -316,7 +344,10 @@ def build_generation_plan(
             "retry at 960x540 on local OOM",
             "enable stronger FP8/GGUF/INT8 quantization",
             "offer RunPod offload with explicit user confirmation",
+            "Auto mode packages cloud workflows when local hardware is unsafe and falls back gracefully if RunPod is unavailable",
         ],
+        "cloud_mode": normalized_cloud_mode,
+        "cloud_status": cloud_manager.status_markdown(),
         "phase3_todos": video_assembly.PHASE3_TODOS,
     }
     return "```json\n" + json.dumps(plan, indent=2) + "\n```"
@@ -329,19 +360,19 @@ def run_video_generation_pipeline(
     pipeline: str,
     duration_seconds: int,
     target_duration: int,
-    use_runpod: bool,
+    cloud_mode: str,
     progress: gr.Progress = gr.Progress(track_tqdm=True),
 ) -> tuple[str, str, str | None]:
-    """Launch the Phase 2 video assembly orchestrator from Gradio."""
+    """Launch the Phase 4.1 hybrid video assembly orchestrator from Gradio."""
 
-    return video_assembly.gradio_build_video_pipeline(
+    return cloud_manager.gradio_run_hybrid_video_pipeline(
         scene_prompt=scene_prompt,
         selected_character_ids=selected_character_ids,
         scene_type=scene_type,
         pipeline=pipeline,
         duration_seconds=duration_seconds,
         target_duration=target_duration,
-        use_runpod=use_runpod,
+        cloud_mode=cloud_mode,
         progress=progress,
     )
 
@@ -507,6 +538,18 @@ def build_ui() -> gr.Blocks:
                 refresh_training_defaults = gr.Button("Refresh Phase 0.5 training defaults", variant="secondary")
                 refresh_training_defaults.click(training_defaults_markdown, outputs=training_defaults_output)
                 demo.load(training_defaults_markdown, outputs=training_defaults_output)
+
+                gr.Markdown("## Phase 4.1 Cloud / Hybrid Mode")
+                cloud_output = gr.Markdown()
+                cloud_json = gr.Code(label="RunPod status JSON", language="json")
+                with gr.Row():
+                    launch_pod_button = gr.Button("Launch RunPod Pod", variant="primary")
+                    refresh_cloud_button = gr.Button("Refresh Cloud Status", variant="secondary")
+                    disconnect_pod_button = gr.Button("Disconnect Pod", variant="stop")
+                launch_pod_button.click(launch_cloud_pod, outputs=[cloud_output, cloud_json])
+                refresh_cloud_button.click(check_cloud_status, outputs=[cloud_output, cloud_json])
+                disconnect_pod_button.click(disconnect_cloud_pod, outputs=[cloud_output, cloud_json])
+                demo.load(cloud_status_markdown, outputs=cloud_output)
                 gr.Markdown(phase0_test_markdown())
 
             with gr.Tab("Train General Physics LoRA", id="Train General Physics LoRA", visible=initial_interactive) as training_tab:
@@ -617,17 +660,25 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     duration = gr.Slider(5, 10, value=8, step=1, label="Short clip duration seconds")
                     target_duration = gr.Slider(10, 60, value=20, step=1, label="Smart-loop target seconds")
-                use_runpod = gr.Checkbox(label="Allow RunPod cloud fallback/offload for OOM", value=False)
+                recommended_cloud_mode = hardware_check.collect_hardware_report().recommended_cloud_mode
+                cloud_mode = gr.Radio(
+                    ["Local", "Cloud", "Auto"],
+                    value=recommended_cloud_mode,
+                    label="Cloud mode",
+                    info="Local keeps all heavy jobs on this machine; Cloud packages/uses RunPod; Auto chooses from hardware_check and falls back gracefully.",
+                )
+                generate_cloud_status = gr.Markdown(cloud_status_markdown())
+                cloud_mode.change(cloud_status_markdown, outputs=generate_cloud_status)
                 with gr.Row():
                     generate_plan = gr.Button("Build generation plan", variant="secondary", interactive=initial_interactive)
                     generate_video = gr.Button("Generate Video", variant="primary", interactive=initial_interactive)
                 plan_output = gr.Markdown()
                 pipeline_json = gr.Code(label="Pipeline result / manifest", language="json")
                 final_video_file = gr.File(label="Final upscaled video placeholder")
-                generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, use_runpod], outputs=plan_output)
+                generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, cloud_mode], outputs=plan_output)
                 generate_video.click(
                     run_video_generation_pipeline,
-                    inputs=[scene_prompt, selected_partners, scene_type, pipeline, duration, target_duration, use_runpod],
+                    inputs=[scene_prompt, selected_partners, scene_type, pipeline, duration, target_duration, cloud_mode],
                     outputs=[plan_output, pipeline_json, final_video_file],
                 )
 

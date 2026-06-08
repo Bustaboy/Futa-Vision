@@ -24,6 +24,10 @@ DEFAULT_STRATEGY = (
 )
 DEFAULT_RESOLUTION = "1280x720 (720p)"
 DEFAULT_UPSCALERS = ["SeedVR 2.5", "RTX Video SR", "Nomos2"]
+HYBRID_LOCAL_MODE = "Local"
+HYBRID_CLOUD_MODE = "Cloud"
+HYBRID_AUTO_MODE = "Auto"
+
 
 
 @dataclass(slots=True)
@@ -55,6 +59,8 @@ class HardwareReport:
     minimum_recommended_cache_gb: float
     recommendations: list[str]
     warnings: list[str]
+    recommended_cloud_mode: str = HYBRID_AUTO_MODE
+    cloud_mode_reason: str = "Auto keeps UI/scoring/timeline local and offloads only when hardware or OOM fallback requires it."
 
 
 def _round_gb(value: float | None) -> float | None:
@@ -229,6 +235,23 @@ def build_recommendations(
     return mode, recommendations, warnings, mode_reason
 
 
+def recommend_cloud_mode(gpu: GPUInfo) -> tuple[str, str]:
+    """Recommend Local/Cloud/Auto for Phase 4.1 hybrid execution.
+
+    The RTX 4070 8 GB target remains Local by default with Auto as the UI
+    selector because Phase 4.1 should only offload when CUDA is missing, VRAM is
+    below the supported floor, or a later OOM path needs RunPod.
+    """
+
+    if not gpu.cuda_available:
+        return HYBRID_CLOUD_MODE, "No CUDA GPU was detected; RunPod is the safest heavy-job target."
+    if gpu.total_vram_gb is not None and gpu.total_vram_gb < TARGET_LOCAL_VRAM_GB:
+        return HYBRID_CLOUD_MODE, "Detected VRAM is below the 8 GB local compatibility target."
+    if gpu.total_vram_gb is not None and gpu.total_vram_gb <= LOW_VRAM_THRESHOLD_GB:
+        return HYBRID_AUTO_MODE, "RTX 4070-class VRAM detected; run 720p locally and offload only on OOM/heavy upscales."
+    return HYBRID_LOCAL_MODE, "GPU VRAM is above the low-VRAM threshold, so local execution is preferred."
+
+
 def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
     """Collect GPU and disk-cache data for the CLI and Gradio Setup tab."""
 
@@ -241,6 +264,8 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
     mode, recommendations, warnings, mode_reason = build_recommendations(
         gpu, cache_free_gb
     )
+
+    recommended_cloud_mode, cloud_mode_reason = recommend_cloud_mode(gpu)
 
     return HardwareReport(
         gpu=gpu,
@@ -256,6 +281,8 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
         minimum_recommended_cache_gb=MIN_RECOMMENDED_CACHE_GB,
         recommendations=recommendations,
         warnings=warnings,
+        recommended_cloud_mode=recommended_cloud_mode,
+        cloud_mode_reason=cloud_mode_reason,
     )
 
 
@@ -294,6 +321,8 @@ def get_low_vram_settings() -> dict[str, Any]:
         "resolution": DEFAULT_RESOLUTION,
         "device": "cuda" if report.gpu.cuda_available else "cpu_or_runpod",
         "runpod_recommended": report.recommended_mode == "cloud_recommended",
+        "cloud_mode": report.recommended_cloud_mode,
+        "cloud_mode_reason": report.cloud_mode_reason,
         "estimated_minutes_per_epoch": 6 if low_vram else 3,
         "hardware_summary": {
             "gpu": report.gpu.name,
@@ -312,6 +341,7 @@ def report_to_markdown(report: HardwareReport) -> str:
     lines = [
         "## Hardware Status",
         f"**Recommended mode:** `{report.recommended_mode}` — {report.mode_reason}",
+        f"**Cloud mode selector default:** `{report.recommended_cloud_mode}` — {report.cloud_mode_reason}",
         "",
         f"**Default strategy:** {report.default_strategy}.",
         f"**Default local resolution:** {report.default_resolution}.",
