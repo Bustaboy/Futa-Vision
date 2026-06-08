@@ -1,6 +1,6 @@
 # Futa-Vision pinned runtime dependencies.
 # Reference docs/source_document.md and CURSOR_VIBE_CODING_GUIDE.md before changing these pins.
-# Python target: 3.12+ for the first Gradio implementation and local-first backend.
+# Python target: 3.12-3.13 for the first Gradio implementation and local-first backend.
 
 # PyTorch stack for NVIDIA CUDA workflows used by ComfyUI/Ostris.
 # If your platform requires a custom wheel index, install with the matching PyTorch index URL first,
@@ -9,8 +9,8 @@ torch==2.9.1
 torchvision==0.24.1
 torchaudio==2.9.1
 
-# Fast-start UI: Gradio 5.x Blocks/Tabs plus ChatInterface.
-gradio==5.49.1
+# Fast-start UI: Gradio 6.x Blocks/Tabs plus ChatInterface.
+gradio==6.7.0
 
 # Ostris AI Toolkit PyPI wrapper pin for metadata/compatibility checks.
 # The preferred production path remains a Git checkout detected by setup.py.
@@ -26,7 +26,7 @@ runpod==1.9.1
 # Environment/config/runtime helpers.
 # Phase 0.5 keeps python-dotenv for `.env` app gating and training-engine path discovery.
 python-dotenv==1.2.2
-pydantic>=2.0
+pydantic==2.12.5
 pydantic-settings==2.12.0
 PyYAML==6.0.3
 requests==2.32.5
@@ -38,7 +38,7 @@ huggingface-hub==1.17.0
 safetensors==0.7.0
 # Pillow and opencv-python support image thumbnails, starter-image handling, neutral dataset assets, and future frame sampling.
 Pillow==11.0.0
-numpy==2.3.5
+numpy==2.2.6
 opencv-python==4.12.0.88
 # Phase 3.1 timeline trimming/concatenation and playable preview rendering.
 moviepy==2.2.1
