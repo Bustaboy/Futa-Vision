@@ -84,13 +84,24 @@ ARG_ORDER = [
     "muscle",
     "softness",
     "posture",
+    "shoulder_hip_balance",
+    "limb_length",
+    "glute_leg_emphasis",
+    "body_framing",
     "face_shape",
     "eye_style",
     "expression",
     "makeup",
+    "eye_color",
+    "brow_intensity",
+    "mouth_feature",
+    "expression_intensity",
     "hair_style",
     "hair_color",
     "head_feature_notes",
+    "ear_style",
+    "head_ornaments",
+    "race_feature_separation",
     "futa_size",
     "futa_shape",
     "futa_details",
@@ -98,25 +109,40 @@ ARG_ORDER = [
     "anatomy_consistency",
     "futa_proportion_scale",
     "futa_shape_lock",
+    "futa_silhouette_lock",
     "futa_material_match",
+    "futa_material_continuity",
     "futa_body_integration",
+    "futa_root_alignment",
     "futa_visibility",
+    "futa_visibility_framing",
     "futa_contact_behavior",
+    "futa_contact_readability",
     "futa_pressure_response",
+    "futa_pressure_readability",
     "futa_regeneration_strictness",
+    "futa_scoring_retry_policy",
     "futa_negative_helpers",
     "skin_material",
     "skin_tone",
     "render_finish",
+    "material_lighting",
+    "render_detail",
     "outfit_style",
     "accessories",
+    "outfit_coverage",
+    "accessory_priority",
     "behavior_tags",
+    "gaze_behavior",
+    "interaction_distance",
+    "behavior_intensity",
     "motion_emphasis",
     "contact_emphasis",
     "stretch_emphasis",
     "deformation_emphasis",
     "jiggle_emphasis",
     "flow_emphasis",
+    "secondary_motion",
     "slime_viscosity",
     "slime_translucency",
     "slime_bubble_density",
@@ -182,13 +208,24 @@ def _args(**overrides: Any) -> list[Any]:
         "muscle": 0.35,
         "softness": 0.65,
         "posture": "confident contrapposto",
+        "shoulder_hip_balance": "soft hourglass",
+        "limb_length": "average limbs",
+        "glute_leg_emphasis": "soft lower-body volume",
+        "body_framing": "half-body scoring frame",
         "face_shape": "soft oval",
         "eye_style": "slime glow",
         "expression": "confident smirk",
         "makeup": "gloss lips",
+        "eye_color": "slime glow",
+        "brow_intensity": 0.35,
+        "mouth_feature": "gloss lips",
+        "expression_intensity": 0.6,
         "hair_style": "slime tendrils",
         "hair_color": "emerald translucent tint",
         "head_feature_notes": "keep head silhouette readable",
+        "ear_style": "slime ear shapes",
+        "head_ornaments": "glowing markings",
+        "race_feature_separation": "keep slime tendrils separate from facial silhouette",
         "futa_size": "hero focus",
         "futa_shape": "slime-formed",
         "futa_details": "translucent internal glow",
@@ -196,25 +233,40 @@ def _args(**overrides: Any) -> list[Any]:
         "anatomy_consistency": "maximum for LoRA training",
         "futa_proportion_scale": 1.15,
         "futa_shape_lock": "race-material integrated lock",
+        "futa_silhouette_lock": "slime silhouette re-lock",
         "futa_material_match": "translucent material continuity",
+        "futa_material_continuity": "translucent internal continuity",
         "futa_body_integration": "slime reformed integration",
+        "futa_root_alignment": "slime reformed root",
         "futa_visibility": "clear scoring visibility",
+        "futa_visibility_framing": "low-res silhouette test framing",
         "futa_contact_behavior": "slime contact spread control",
+        "futa_contact_readability": "slime contact spread boundaries",
         "futa_pressure_response": "slime surface displacement",
+        "futa_pressure_readability": "slime displacement map",
         "futa_regeneration_strictness": "maximum training consistency",
+        "futa_scoring_retry_policy": "maximum scoring retry strictness",
         "futa_negative_helpers": ["unstable anatomy", "melted silhouette", "material mismatch"],
         "skin_material": "translucent slime",
         "skin_tone": "emerald",
         "render_finish": "glossy material study",
+        "material_lighting": "glowing internal light",
+        "render_detail": "training-sheet crisp",
         "outfit_style": "minimal character sheet",
         "accessories": "simple jewelry",
+        "outfit_coverage": "material study uncluttered",
+        "accessory_priority": "silhouette first",
         "behavior_tags": "adult, confident partner, male-focused composition",
+        "gaze_behavior": "focused on male counterpart",
+        "interaction_distance": "contact-ready two-character spacing",
+        "behavior_intensity": 0.65,
         "motion_emphasis": "slime flow with shape re-lock",
         "contact_emphasis": 0.8,
         "stretch_emphasis": 0.65,
         "deformation_emphasis": 0.55,
         "jiggle_emphasis": 0.5,
         "flow_emphasis": 0.85,
+        "secondary_motion": "fluid/slime response",
         "slime_viscosity": 0.7,
         "slime_translucency": 0.55,
         "slime_bubble_density": 0.3,
@@ -255,7 +307,7 @@ def _args(**overrides: Any) -> list[Any]:
 
 
 def test_adaptive_race_update_exposes_expected_sections_and_defaults() -> None:
-    expected_count = 1 + len(character_creator.SECTION_LABELS) + 14 + 21
+    expected_count = 1 + len(character_creator.SECTION_LABELS) + 71
     for race in ["Slime Futa", "Dragonkin", "Android/Cyborg", "Angel", "Kitsune", "Humanoid"]:
         updates = character_creator.adaptive_race_update(race)
         assert len(updates) == expected_count
@@ -263,15 +315,29 @@ def test_adaptive_race_update_exposes_expected_sections_and_defaults() -> None:
     labels = list(character_creator.SECTION_LABELS)
     slime_updates = character_creator.adaptive_race_update("Slime Futa")
     assert slime_updates[1 + labels.index("slime")]["visible"] is True
+    assert slime_updates[1 + labels.index("slime")]["open"] is True
     assert any(update.get("value") == "Slime futa-on-male preset" for update in slime_updates if isinstance(update, dict))
     assert any(update.get("value") == "slime futa shape retention" for update in slime_updates if isinstance(update, dict))
+    assert any(update.get("value") == "slime silhouette re-lock" for update in slime_updates if isinstance(update, dict))
+    assert any(update.get("value") == 0.86 for update in slime_updates if isinstance(update, dict))
 
     dragon_updates = character_creator.adaptive_race_update("Dragonkin")
+    assert dragon_updates[1 + labels.index("horns")]["visible"] is True
+    assert dragon_updates[1 + labels.index("tails")]["visible"] is True
+    assert dragon_updates[1 + labels.index("wings")]["visible"] is True
     assert dragon_updates[1 + labels.index("scales")]["visible"] is True
     android_updates = character_creator.adaptive_race_update("Android/Cyborg")
     assert android_updates[1 + labels.index("synthetic")]["visible"] is True
+    demon_updates = character_creator.adaptive_race_update("Demon/Succubus")
+    assert demon_updates[1 + labels.index("horns")]["visible"] is True
+    assert demon_updates[1 + labels.index("tails")]["visible"] is True
+    assert demon_updates[1 + labels.index("wings")]["visible"] is True
+    elf_updates = character_creator.adaptive_race_update("Elf")
+    assert any(update.get("value") == "long pointed elf ears" for update in elf_updates if isinstance(update, dict))
     humanoid_updates = character_creator.adaptive_race_update("Humanoid")
     assert humanoid_updates[1 + labels.index("slime")]["visible"] is False
+    hybrid_updates = character_creator.adaptive_race_update("Humanoid", "Slime")
+    assert hybrid_updates[1 + labels.index("slime")]["visible"] is True
 
 
 def test_mode_visibility_is_non_destructive_visibility_only() -> None:
@@ -283,11 +349,29 @@ def test_mode_visibility_is_non_destructive_visibility_only() -> None:
     assert deep == {"visible": True}
 
 
+def test_focus_preset_applies_hidden_deep_defaults() -> None:
+    updates = character_creator.apply_focus_preset("Translucent slime futa", "Humanoid")
+    assert updates[0] == "Slime Futa"
+    assert updates[2] == "Slime futa-on-male preset"
+    assert "slime silhouette re-lock" in updates
+    assert "translucent internal continuity" in updates
+    assert "fluid/slime response" in updates
+    assert 0.86 in updates
+
+
 def test_slime_futa_metadata_has_prompt_sections_scoring_and_safe_tags() -> None:
     metadata = character_creator.build_character_metadata(*_args())
     prompts = metadata["prompts"]
     assert metadata["race"]["primary"] == "Slime Futa"
+    assert metadata["body"]["shoulder_hip_balance"] == "soft hourglass"
+    assert metadata["face"]["eye_color"] == "slime glow"
+    assert metadata["hair_head_features"]["ear_style"] == "slime ear shapes"
+    assert metadata["futa_anatomy"]["silhouette_lock"] == "slime silhouette re-lock"
+    assert metadata["futa_anatomy"]["contact_readability"] == "slime contact spread boundaries"
+    assert metadata["material_rendering"]["lighting"] == "glowing internal light"
     assert metadata["material_rendering"]["slime"]["shape_retention"] == "slime futa shape retention"
+    assert metadata["behavior"]["gaze"] == "focused on male counterpart"
+    assert metadata["physics_emphasis"]["secondary_motion"] == "fluid/slime response"
     assert "sections" in prompts
     assert "slime anatomy collapse" in prompts["negative"]
     assert "melted silhouette" in prompts["negative"]
@@ -360,6 +444,10 @@ def test_base_image_trait_extraction_handles_rgb_alpha_dark_and_bright(tmp_path:
             assert traits["height"] == 12
             assert "suggested_material" in traits
             assert "likely_render_finish" in traits
+            assert "palette_summary" in traits
+            assert "transparency_ratio" in traits
+            if filename == "alpha.png":
+                assert traits["has_alpha"] is True
     finally:
         monkeypatch.undo()
 

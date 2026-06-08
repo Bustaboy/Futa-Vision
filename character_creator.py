@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -113,7 +114,9 @@ class ExtractedImageTraits:
     height: int
     aspect_ratio: float
     has_alpha: bool
+    transparency_ratio: float
     dominant_color: str
+    palette_summary: tuple[str, ...]
     brightness: float
     contrast: float
     likely_render_finish: str
@@ -121,6 +124,23 @@ class ExtractedImageTraits:
     suggested_material: str
     suggested_body_framing: str
     notes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptiveRaceState:
+    """Resolved adaptive race state for visibility, defaults, and metadata."""
+
+    pack: RacePack
+    sections: frozenset[str]
+    open_sections: frozenset[str]
+    secondary_pack: str
+    slime_enabled: bool
+    latex_enabled: bool
+    wing_enabled: bool
+    tail_enabled: bool
+    scale_enabled: bool
+    synthetic_enabled: bool
+    large_enabled: bool
 
 
 SECTION_LABELS = {
@@ -183,24 +203,46 @@ RACE_LABELS = [pack.label for pack in RACE_PACKS]
 RACE_BY_LABEL = {pack.label: pack for pack in RACE_PACKS}
 
 BODY_ARCHETYPES = ["Balanced athletic", "Soft curvy", "Tall elegant", "Muscular power build", "Compact adult", "Mature statuesque", "Heavy fantasy frame", "Slender dancer"]
+BODY_BALANCE_OPTIONS = ["balanced shoulders/hips", "narrow shoulders wide hips", "broad shoulders balanced hips", "power frame", "soft hourglass", "athletic taper"]
+LIMB_LENGTH_OPTIONS = ["average limbs", "long elegant limbs", "compact powerful limbs", "runner legs", "dancer limbs", "large-frame reach"]
+GLUTE_LEG_OPTIONS = ["balanced lower body", "glute emphasis", "thick thighs", "defined legs", "powerful hips and legs", "soft lower-body volume"]
+BODY_FRAMING_OPTIONS = ["portrait crop", "half-body scoring frame", "full-body character sheet", "three-quarter pose frame", "multi-character compatible frame"]
 FUTA_CATEGORIES = ["None / not emphasized", "Balanced", "Prominent but stable", "Futa-on-male lead preset", "Dominant futa partner preset", "Slime-integrated", "Slime futa-on-male preset", "Latex-integrated", "Monster/fantasy-coded"]
 FUTA_SIZE_OPTIONS = ["not emphasized", "modest", "balanced", "prominent", "hero focus"]
 FUTA_SHAPE_OPTIONS = ["natural tapered", "smooth stylized", "slime-formed", "latex-sheathed", "fantasy ridged", "monster-coded"]
 FUTA_DETAIL_OPTIONS = ["clean simple", "vein/detail light", "gloss-highlighted", "translucent internal glow", "race-integrated details"]
 FUTA_MOTION_OPTIONS = ["maximum stability", "controlled secondary motion", "elastic follow-through", "fluid reshape and re-lock", "heavy stable contact"]
 FUTA_SHAPE_LOCK_OPTIONS = ["standard prompt lock", "strict silhouette lock", "race-material integrated lock", "training-sheet maximum lock"]
+FUTA_SILHOUETTE_LOCK_OPTIONS = ["front-readable silhouette", "three-quarter readable silhouette", "contact-readable silhouette", "slime silhouette re-lock", "maximum sheet consistency"]
+FUTA_ROOT_ALIGNMENT_OPTIONS = ["stable pelvis/root alignment", "athletic stance alignment", "heavy-frame root support", "slime reformed root", "latex seamless root", "fantasy anatomy root"]
 FUTA_MATERIAL_MATCH_OPTIONS = ["match body skin/material", "subtle contrast", "gloss continuity", "translucent material continuity", "fantasy accent markings"]
+FUTA_MATERIAL_CONTINUITY_OPTIONS = ["body-material continuous", "subtle transition", "clear race-material transition", "wet/gloss continuity", "translucent internal continuity"]
 FUTA_BODY_INTEGRATION_OPTIONS = ["natural body integration", "stable pelvis/root alignment", "race-specific integration", "slime reformed integration", "latex seamless integration"]
 FUTA_VISIBILITY_OPTIONS = ["balanced visibility", "clear scoring visibility", "camera-prioritized silhouette", "multi-character readable framing"]
+FUTA_VISIBILITY_FRAMING_OPTIONS = ["waist-up readability", "full-body reference readability", "multi-character readable framing", "contact-sheet framing", "low-res silhouette test framing"]
 FUTA_CONTACT_OPTIONS = ["stable contact cues", "pressure-readable contact", "high-contact scoring emphasis", "slime contact spread control", "heavy stable contact"]
+FUTA_CONTACT_READABILITY_OPTIONS = ["minimal contact cues", "clear contact boundaries", "pressure-readable contact zones", "high-contact scoring readability", "slime contact spread boundaries"]
 FUTA_PRESSURE_OPTIONS = ["subtle pressure response", "clear indentation cues", "controlled deformation", "slime surface displacement", "heavy-body pressure"]
+FUTA_PRESSURE_READABILITY_OPTIONS = ["subtle surface response", "clear pressure landmarks", "controlled deformation map", "slime displacement map", "heavy-body pressure landmarks"]
 FUTA_REGEN_OPTIONS = ["normal retry tolerance", "strict anatomy retry", "strict contact retry", "maximum training consistency"]
+FUTA_SCORING_RETRY_OPTIONS = ["score once then inspect", "retry on anatomy drift", "retry on contact ambiguity", "retry on material mismatch", "maximum scoring retry strictness"]
 FUTA_NEGATIVE_HELPERS = ["unstable anatomy", "extra anatomy", "detached anatomy", "scale mismatch", "motion smear", "contact ambiguity", "material mismatch", "melted silhouette"]
 PERSONALITY_TAGS = ["confident", "playful", "elegant", "gentle", "commanding", "mischievous", "stoic", "curious", "protective", "chaotic", "regal", "shy", "assertive partner", "male-focused", "teasing", "caretaking"]
+FACE_EYE_COLOR_OPTIONS = ["natural brown", "green", "blue", "gold", "red glow", "slime glow", "void violet", "synthetic cyan", "heterochromia"]
+FACE_MOUTH_FEATURE_OPTIONS = ["natural mouth", "soft smile line", "fangs", "tusks", "gloss lips", "sharp canines", "synthetic seam lips"]
+HAIR_EAR_STYLE_OPTIONS = ["human ears", "long pointed elf ears", "short pointed ears", "cat ears", "fox ears", "wolf ears", "bunny ears", "fin ears", "synthetic audio fins", "slime ear shapes"]
+HEAD_ORNAMENT_OPTIONS = ["none", "halo", "small crown", "hair pins", "ribbons", "horn jewelry", "glowing markings", "visor", "aquatic fins"]
 STYLE_PRESETS = ["Semi-realistic 3D anime", "Cinematic fantasy", "Soft studio portrait", "Gothic dramatic", "Neon nightclub", "Moonlit forest", "Celestial glow", "Cosmic surreal", "Glossy material study", "Low-res anatomy test"]
 SECONDARY_PACKS = ["None", "Slime", "Living Latex/Sentient Rubber", "Eldritch/Void-Touched", "Demon horns/tail", "Animal ears/tail", "Dragon scales", "Synthetic seams", "Celestial wings"]
 PHYSICS_PRIORITY_OPTIONS = ["Balanced", "Contact clarity", "Pressure deformation", "Identity stability", "Slime flow", "Tail/wing secondary motion", "Heavy-body dynamics", "Training consistency"]
 MATERIAL_EMPHASIS_OPTIONS = ["Natural skin", "Glossy skin", "Translucent slime", "High-viscosity slime", "Living latex", "Scales", "Feathers", "Synthetic panels", "Void glow"]
+MATERIAL_LIGHTING_OPTIONS = ["soft key light", "cinematic rim light", "wet specular highlights", "glowing internal light", "flat character sheet lighting", "neon edge light"]
+RENDER_DETAIL_OPTIONS = ["clean low-res readable", "balanced detail", "high material detail", "training-sheet crisp", "motion-preview simplified"]
+OUTFIT_COVERAGE_OPTIONS = ["minimal silhouette-safe", "light accessories only", "bodysuit coverage", "fantasy outfit coverage", "armor accents", "material study uncluttered"]
+ACCESSORY_PRIORITY_OPTIONS = ["silhouette first", "identity jewelry", "race trait accents", "contact-safe accessories", "training-sheet markers"]
+GAZE_BEHAVIOR_OPTIONS = ["camera-aware", "focused on male counterpart", "playful side glance", "commanding eye contact", "gentle attentive gaze", "feral/monster focus"]
+INTERACTION_DISTANCE_OPTIONS = ["single-character sheet", "close partner framing", "contact-ready two-character spacing", "wide multi-character spacing", "portrait-only reference"]
+SECONDARY_MOTION_OPTIONS = ["minimal secondary motion", "hair follow-through", "tail/wing follow-through", "soft-body response", "fluid/slime response", "heavy-body inertia"]
 SLIME_BODY_TYPE_OPTIONS = ["full slime", "humanoid slime", "slime futa", "partial slime overlay", "slime armor/suit effect"]
 SLIME_VISCOSITY_PROFILES = ["watery", "soft gel", "thick gel", "elastic", "tar-like fantasy profile"]
 SLIME_TRANSLUCENCY_PROFILES = ["opaque", "semi-translucent", "highly translucent", "glassy", "glowing internal material"]
@@ -247,8 +289,11 @@ def _split_tags(tags: str | list[str] | tuple[str, ...] | None) -> list[str]:
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
-def _enabled_sections(race: str, secondary_pack: str = "None") -> set[str]:
-    sections = set(_pack_for(race).sections)
+def race_adaptive_state(race: str, secondary_pack: str = "None") -> AdaptiveRaceState:
+    """Resolve one authoritative adaptive state for race-driven UI behavior."""
+
+    pack = _pack_for(race)
+    sections = set(pack.sections)
     secondary_sections = {
         "Slime": {"slime"},
         "Living Latex/Sentient Rubber": {"latex"},
@@ -260,34 +305,99 @@ def _enabled_sections(race: str, secondary_pack: str = "None") -> set[str]:
         "Celestial wings": {"wings"},
     }
     sections.update(secondary_sections.get(secondary_pack, set()))
-    return sections
+    if pack.label == "Slime Futa":
+        sections.add("slime")
+    fantasy_open_sections = {
+        "slime",
+        "latex",
+        "animal",
+        "horns",
+        "tails",
+        "wings",
+        "scales",
+        "synthetic",
+        "eldritch",
+        "alien",
+        "large_body",
+        "aquatic",
+    }
+    return AdaptiveRaceState(
+        pack=pack,
+        sections=frozenset(sections),
+        open_sections=frozenset(sections & fantasy_open_sections),
+        secondary_pack=secondary_pack or "None",
+        slime_enabled="slime" in sections,
+        latex_enabled="latex" in sections,
+        wing_enabled="wings" in sections,
+        tail_enabled="tails" in sections,
+        scale_enabled="scales" in sections,
+        synthetic_enabled="synthetic" in sections,
+        large_enabled="large_body" in sections,
+    )
+
+
+def _enabled_sections(race: str, secondary_pack: str = "None") -> set[str]:
+    return set(race_adaptive_state(race, secondary_pack).sections)
 
 
 def section_visibility(race: str, secondary_pack: str = "None") -> list[Any]:
     """Return Gradio visibility updates for every adaptive section."""
 
-    visible = _enabled_sections(race, secondary_pack)
-    return [gr.update(visible=name in visible, open=name in visible and name in {"slime", "animal", "horns", "tails", "wings", "scales", "synthetic", "eldritch", "alien"}) for name in SECTION_LABELS]
+    state = race_adaptive_state(race, secondary_pack)
+    return [gr.update(visible=name in state.sections, open=name in state.open_sections) for name in SECTION_LABELS]
 
 
 def _race_defaults(race: str, secondary_pack: str = "None") -> dict[str, Any]:
-    pack = _pack_for(race)
-    sections = _enabled_sections(race, secondary_pack)
-    slime_enabled = "slime" in sections or pack.label == "Slime Futa"
+    state = race_adaptive_state(race, secondary_pack)
+    pack = state.pack
+    sections = set(state.sections)
+    slime_enabled = state.slime_enabled
     tail_count = 3 if pack.label == "Kitsune" else 1 if "tails" in sections else 0
-    synthetic_enabled = "synthetic" in sections
-    scale_enabled = "scales" in sections
-    wing_enabled = "wings" in sections
-    large_enabled = "large_body" in sections
+    synthetic_enabled = state.synthetic_enabled
+    scale_enabled = state.scale_enabled
+    wing_enabled = state.wing_enabled
+    large_enabled = state.large_enabled
+    animal_tail_style = (
+        "fox tail" if pack.label == "Kitsune" else
+        "cat tail" if pack.label == "Cat/Neko" else
+        "wolf tail" if pack.label == "Wolf/Werewolf" else
+        "bunny tail" if pack.label == "Bunny Hybrid" else
+        "bovine tail" if pack.label == "Minotaur" else
+        "goat tail" if pack.label == "Satyr/Faun" else
+        "none"
+    )
+    ear_style = (
+        "long pointed elf ears" if pack.label in {"Elf", "Dark Elf"} else
+        "cat ears" if pack.label == "Cat/Neko" else
+        "fox ears" if pack.label == "Kitsune" else
+        "wolf ears" if pack.label == "Wolf/Werewolf" else
+        "bunny ears" if pack.label == "Bunny Hybrid" else
+        "fin ears" if "aquatic" in sections else
+        "synthetic audio fins" if synthetic_enabled else
+        "slime ear shapes" if slime_enabled else
+        "human ears"
+    )
     return {
         "futa_category": "Slime futa-on-male preset" if pack.label == "Slime Futa" else "Slime-integrated" if slime_enabled else "Latex-integrated" if "latex" in sections else "Futa-on-male lead preset",
         "animal_ears": "fox" if pack.label == "Kitsune" else "cat" if pack.label == "Cat/Neko" else "wolf" if pack.label == "Wolf/Werewolf" else "bunny" if pack.label == "Bunny Hybrid" else "bovine" if pack.label == "Minotaur" else "none",
+        "animal_tail_style": animal_tail_style,
         "tail_count": tail_count,
         "horn_style": "curved demon horns" if pack.label in {"Demon/Succubus", "Tiefling"} or secondary_pack == "Demon horns/tail" else "dragon horns" if pack.label == "Dragonkin" or secondary_pack == "Dragon scales" else "bovine horns" if pack.label == "Minotaur" else "small swept horns" if "horns" in sections else "none",
         "wing_style": "feathered wings" if pack.label in {"Angel", "Harpy"} or secondary_pack == "Celestial wings" else "bat-like wings" if pack.label == "Demon/Succubus" else "dragon wings" if pack.label == "Dragonkin" else "none",
         "scale_pattern": "arm and shoulder scales" if "scales" in sections else "none",
         "synthetic_finish": "gloss panels" if "synthetic" in sections else "none",
         "alien_palette": "violet glow" if "alien" in sections or "eldritch" in sections else "natural dark",
+        "shoulder_hip_balance": "power frame" if large_enabled else "soft hourglass" if pack.label in {"Slime", "Slime Futa"} else "broad shoulders balanced hips" if pack.label in {"Orc/Oni", "Dragonkin", "Minotaur"} else "balanced shoulders/hips",
+        "limb_length": "large-frame reach" if large_enabled else "long elegant limbs" if pack.label in {"Elf", "Dark Elf", "Angel", "Vampire"} else "dancer limbs" if pack.label in {"Kitsune", "Cat/Neko"} else "average limbs",
+        "glute_leg_emphasis": "powerful hips and legs" if large_enabled else "soft lower-body volume" if slime_enabled else "defined legs" if pack.label in {"Elf", "Dark Elf", "Angel"} else "balanced lower body",
+        "body_framing": "full-body character sheet" if {"tails", "wings", "scales"} & sections else "half-body scoring frame" if slime_enabled else "multi-character compatible frame",
+        "eye_color": "slime glow" if slime_enabled else "synthetic cyan" if synthetic_enabled else "void violet" if "eldritch" in sections else "gold" if pack.label in {"Dragonkin", "Angel"} else "red glow" if pack.label in {"Demon/Succubus", "Vampire"} else "green",
+        "brow_intensity": 0.7 if pack.label in {"Demon/Succubus", "Orc/Oni", "Dragonkin", "Vampire"} else 0.35,
+        "mouth_feature": "tusks" if pack.label in {"Orc/Oni", "Minotaur"} else "fangs" if pack.label in {"Vampire", "Demon/Succubus", "Wolf/Werewolf"} else "gloss lips" if slime_enabled else "natural mouth",
+        "expression_intensity": 0.72 if pack.label in {"Demon/Succubus", "Orc/Oni", "Dragonkin"} else 0.55,
+        "ear_style": ear_style,
+        "head_ornaments": "halo" if pack.label == "Angel" else "horn jewelry" if "horns" in sections else "glowing markings" if "eldritch" in sections or slime_enabled else "none",
+        "race_feature_separation": "keep ears, horns, wings, and hair as separate readable silhouettes",
         "motion_emphasis": "slime flow with shape re-lock" if slime_enabled else "elastic material response" if "latex" in sections else "tail/wing secondary motion" if {"tails", "wings"} & sections else "heavy-body weight transfer" if "large_body" in sections else "stable humanoid motion",
         "skin_material": "translucent slime" if slime_enabled else "gloss latex" if "latex" in sections else "synthetic skin" if "synthetic" in sections else "natural skin",
         "futa_size": "hero focus" if pack.label == "Slime Futa" else "prominent",
@@ -297,14 +407,38 @@ def _race_defaults(race: str, secondary_pack: str = "None") -> dict[str, Any]:
         "physics_priority": "Slime flow" if slime_enabled else "Tail/wing secondary motion" if wing_enabled or tail_count else "Heavy-body dynamics" if large_enabled else "Training consistency" if scale_enabled or synthetic_enabled else "Contact clarity",
         "material_emphasis": "Translucent slime" if slime_enabled else "Living latex" if "latex" in sections else "Synthetic panels" if synthetic_enabled else "Scales" if scale_enabled else "Feathers" if wing_enabled and pack.label in {"Angel", "Harpy"} else "Natural skin",
         "futa_shape_lock": "race-material integrated lock" if slime_enabled or "latex" in sections else "strict silhouette lock",
+        "futa_silhouette_lock": "slime silhouette re-lock" if slime_enabled else "maximum sheet consistency" if pack.family in {"advanced", "signature"} else "front-readable silhouette",
         "futa_material_match": "translucent material continuity" if slime_enabled else "gloss continuity" if "latex" in sections else "match body skin/material",
+        "futa_material_continuity": "translucent internal continuity" if slime_enabled else "wet/gloss continuity" if "latex" in sections else "body-material continuous",
         "futa_body_integration": "slime reformed integration" if slime_enabled else "latex seamless integration" if "latex" in sections else "stable pelvis/root alignment",
+        "futa_root_alignment": "slime reformed root" if slime_enabled else "latex seamless root" if "latex" in sections else "heavy-frame root support" if large_enabled else "stable pelvis/root alignment",
         "futa_visibility": "clear scoring visibility",
+        "futa_visibility_framing": "low-res silhouette test framing" if slime_enabled else "full-body reference readability" if {"tails", "wings"} & sections else "multi-character readable framing",
         "futa_contact_behavior": "slime contact spread control" if slime_enabled else "heavy stable contact" if large_enabled else "pressure-readable contact",
+        "futa_contact_readability": "slime contact spread boundaries" if slime_enabled else "high-contact scoring readability" if large_enabled else "pressure-readable contact zones",
         "futa_pressure_response": "slime surface displacement" if slime_enabled else "heavy-body pressure" if large_enabled else "clear indentation cues",
+        "futa_pressure_readability": "slime displacement map" if slime_enabled else "heavy-body pressure landmarks" if large_enabled else "clear pressure landmarks",
         "futa_regeneration_strictness": "maximum training consistency" if slime_enabled or pack.family in {"advanced", "signature"} else "strict anatomy retry",
+        "futa_scoring_retry_policy": "maximum scoring retry strictness" if slime_enabled or pack.family in {"advanced", "signature"} else "retry on anatomy drift",
         "futa_negative_helpers": ["unstable anatomy", "extra anatomy", "detached anatomy", "material mismatch", "melted silhouette"] if slime_enabled else ["unstable anatomy", "extra anatomy", "detached anatomy", "scale mismatch"],
+        "material_lighting": "glowing internal light" if slime_enabled else "wet specular highlights" if "latex" in sections else "cinematic rim light" if pack.family in {"advanced", "signature"} else "soft key light",
+        "render_detail": "training-sheet crisp" if pack.family in {"advanced", "signature"} else "balanced detail",
+        "outfit_coverage": "material study uncluttered" if slime_enabled or "latex" in sections else "fantasy outfit coverage" if {"horns", "tails", "wings", "scales"} & sections else "minimal silhouette-safe",
+        "accessory_priority": "race trait accents" if {"horns", "tails", "wings", "scales"} & sections else "silhouette first",
+        "gaze_behavior": "focused on male counterpart",
+        "interaction_distance": "contact-ready two-character spacing",
+        "behavior_intensity": 0.65 if pack.label in {"Demon/Succubus", "Orc/Oni", "Dragonkin"} else 0.5,
+        "secondary_motion": "fluid/slime response" if slime_enabled else "tail/wing follow-through" if {"tails", "wings"} & sections else "heavy-body inertia" if large_enabled else "hair follow-through",
         "slime_body_type": "slime futa" if pack.label == "Slime Futa" else "humanoid slime",
+        "slime_viscosity": 0.75 if pack.label == "Slime Futa" else 0.65 if slime_enabled else 0.6,
+        "slime_translucency": 0.62 if pack.label == "Slime Futa" else 0.48,
+        "slime_bubble_density": 0.3 if slime_enabled else 0.15,
+        "slime_flow_intensity": 0.72 if slime_enabled else 0.35,
+        "slime_shape_stability": 0.86 if pack.label == "Slime Futa" else 0.78,
+        "slime_tint": "emerald translucent tint" if slime_enabled else "clear gel tint",
+        "slime_gloss": 0.9 if slime_enabled else 0.75,
+        "slime_cohesion": 0.88 if pack.label == "Slime Futa" else 0.8,
+        "slime_futa_options": "slime futa anatomy locked" if pack.label == "Slime Futa" else "glossy stable silhouette",
         "slime_viscosity_profile": "thick gel" if slime_enabled else "soft gel",
         "slime_translucency_profile": "glowing internal material" if pack.label == "Slime Futa" else "semi-translucent",
         "slime_bubble_profile": "subtle internal bubbles",
@@ -327,12 +461,24 @@ def adaptive_race_update(race: str, secondary_pack: str = "None") -> list[Any]:
         *section_visibility(race, secondary_pack),
         gr.update(value=defaults["futa_category"]),
         gr.update(value=defaults["animal_ears"]),
+        gr.update(value=defaults["animal_tail_style"]),
         gr.update(value=defaults["tail_count"]),
         gr.update(value=defaults["horn_style"]),
         gr.update(value=defaults["wing_style"]),
         gr.update(value=defaults["scale_pattern"]),
         gr.update(value=defaults["synthetic_finish"]),
         gr.update(value=defaults["alien_palette"]),
+        gr.update(value=defaults["shoulder_hip_balance"]),
+        gr.update(value=defaults["limb_length"]),
+        gr.update(value=defaults["glute_leg_emphasis"]),
+        gr.update(value=defaults["body_framing"]),
+        gr.update(value=defaults["eye_color"]),
+        gr.update(value=defaults["brow_intensity"]),
+        gr.update(value=defaults["mouth_feature"]),
+        gr.update(value=defaults["expression_intensity"]),
+        gr.update(value=defaults["ear_style"]),
+        gr.update(value=defaults["head_ornaments"]),
+        gr.update(value=defaults["race_feature_separation"]),
         gr.update(value=defaults["motion_emphasis"]),
         gr.update(value=defaults["skin_material"]),
         gr.update(value=defaults["futa_size"]),
@@ -342,13 +488,37 @@ def adaptive_race_update(race: str, secondary_pack: str = "None") -> list[Any]:
         gr.update(value=defaults["physics_priority"]),
         gr.update(value=defaults["material_emphasis"]),
         gr.update(value=defaults["futa_shape_lock"]),
+        gr.update(value=defaults["futa_silhouette_lock"]),
         gr.update(value=defaults["futa_material_match"]),
+        gr.update(value=defaults["futa_material_continuity"]),
         gr.update(value=defaults["futa_body_integration"]),
+        gr.update(value=defaults["futa_root_alignment"]),
         gr.update(value=defaults["futa_visibility"]),
+        gr.update(value=defaults["futa_visibility_framing"]),
         gr.update(value=defaults["futa_contact_behavior"]),
+        gr.update(value=defaults["futa_contact_readability"]),
         gr.update(value=defaults["futa_pressure_response"]),
+        gr.update(value=defaults["futa_pressure_readability"]),
         gr.update(value=defaults["futa_regeneration_strictness"]),
+        gr.update(value=defaults["futa_scoring_retry_policy"]),
         gr.update(value=defaults["futa_negative_helpers"]),
+        gr.update(value=defaults["material_lighting"]),
+        gr.update(value=defaults["render_detail"]),
+        gr.update(value=defaults["outfit_coverage"]),
+        gr.update(value=defaults["accessory_priority"]),
+        gr.update(value=defaults["gaze_behavior"]),
+        gr.update(value=defaults["interaction_distance"]),
+        gr.update(value=defaults["behavior_intensity"]),
+        gr.update(value=defaults["secondary_motion"]),
+        gr.update(value=defaults["slime_viscosity"]),
+        gr.update(value=defaults["slime_translucency"]),
+        gr.update(value=defaults["slime_bubble_density"]),
+        gr.update(value=defaults["slime_flow_intensity"]),
+        gr.update(value=defaults["slime_shape_stability"]),
+        gr.update(value=defaults["slime_tint"]),
+        gr.update(value=defaults["slime_gloss"]),
+        gr.update(value=defaults["slime_cohesion"]),
+        gr.update(value=defaults["slime_futa_options"]),
         gr.update(value=defaults["slime_body_type"]),
         gr.update(value=defaults["slime_viscosity_profile"]),
         gr.update(value=defaults["slime_translucency_profile"]),
@@ -411,6 +581,7 @@ def apply_focus_preset(focus_preset: str, race: str) -> tuple[Any, ...]:
 
     preset = _preset_for(focus_preset)
     selected_race = preset.race or race
+    defaults = _race_defaults(selected_race)
     return (
         selected_race,
         preset.body_archetype,
@@ -429,7 +600,56 @@ def apply_focus_preset(focus_preset: str, race: str) -> tuple[Any, ...]:
         preset.deformation,
         preset.jiggle,
         preset.flow,
+        defaults["shoulder_hip_balance"],
+        defaults["limb_length"],
+        defaults["glute_leg_emphasis"],
+        defaults["body_framing"],
+        defaults["eye_color"],
+        defaults["brow_intensity"],
+        defaults["mouth_feature"],
+        defaults["expression_intensity"],
+        defaults["ear_style"],
+        defaults["head_ornaments"],
+        defaults["race_feature_separation"],
+        defaults["futa_shape_lock"],
+        defaults["futa_silhouette_lock"],
+        defaults["futa_material_match"],
+        defaults["futa_material_continuity"],
+        defaults["futa_body_integration"],
+        defaults["futa_root_alignment"],
+        defaults["futa_visibility"],
+        defaults["futa_visibility_framing"],
+        defaults["futa_contact_behavior"],
+        defaults["futa_contact_readability"],
+        defaults["futa_pressure_response"],
+        defaults["futa_pressure_readability"],
+        defaults["futa_regeneration_strictness"],
+        defaults["futa_scoring_retry_policy"],
+        defaults["futa_negative_helpers"],
+        defaults["material_lighting"],
+        defaults["render_detail"],
+        defaults["outfit_coverage"],
+        defaults["accessory_priority"],
+        defaults["gaze_behavior"],
+        defaults["interaction_distance"],
+        defaults["behavior_intensity"],
+        defaults["secondary_motion"],
+        defaults["slime_viscosity"],
+        defaults["slime_translucency"],
+        defaults["slime_bubble_density"],
+        defaults["slime_flow_intensity"],
+        defaults["slime_shape_stability"],
+        defaults["slime_tint"],
+        defaults["slime_gloss"],
+        defaults["slime_cohesion"],
+        defaults["slime_futa_options"],
         preset.slime_body_type,
+        defaults["slime_viscosity_profile"],
+        defaults["slime_translucency_profile"],
+        defaults["slime_bubble_profile"],
+        defaults["slime_flow_profile"],
+        defaults["slime_reformation"],
+        defaults["slime_drip_control"],
         preset.slime_shape_retention,
     )
 
@@ -475,6 +695,21 @@ def _color_name(rgb: tuple[int, int, int]) -> str:
     return "balanced neutral"
 
 
+def _palette_summary(rgb_image: Any) -> tuple[str, ...]:
+    """Return a small human-readable palette summary from a Pillow RGB image."""
+
+    try:
+        swatch = rgb_image.resize((8, 8))
+        pixels = list(swatch.getdata()) if hasattr(swatch, "getdata") else [swatch.getpixel((0, 0))]
+    except Exception:  # noqa: BLE001 - palette hints are optional.
+        try:
+            pixels = [rgb_image.resize((1, 1)).getpixel((0, 0))]
+        except Exception:  # noqa: BLE001 - final fallback for fake/minimal images.
+            pixels = []
+    buckets = Counter(_color_name(tuple(int(channel) for channel in pixel[:3])) for pixel in pixels if pixel)
+    return tuple(f"{name} ({count})" for name, count in buckets.most_common(4))
+
+
 def extract_base_image_traits(path: str | None) -> dict[str, Any]:
     """Extract broad local-only traits from a base/reference image."""
 
@@ -491,9 +726,18 @@ def extract_base_image_traits(path: str | None) -> dict[str, Any]:
             width, height = rgba.size
             alpha_extrema = rgba.getchannel("A").getextrema()
             has_alpha = alpha_extrema[0] < 255
+            transparency_ratio = 0.0
+            if has_alpha:
+                try:
+                    alpha_thumb = rgba.getchannel("A").resize((16, 16))
+                    alpha_values = list(alpha_thumb.getdata())
+                    transparency_ratio = round(sum(1 for value in alpha_values if int(value) < 250) / max(len(alpha_values), 1), 3)
+                except Exception:  # noqa: BLE001 - alpha extrema is still useful.
+                    transparency_ratio = 1.0
             rgb = rgba.convert("RGB")
             small = rgb.resize((1, 1))
             dominant_rgb = tuple(int(channel) for channel in small.getpixel((0, 0)))
+            palette = _palette_summary(rgb)
             stat = ImageStat.Stat(rgb)
             channels = [float(value) for value in stat.mean]
             brightness = round(sum(channels) / (3 * 255), 3)
@@ -526,7 +770,9 @@ def extract_base_image_traits(path: str | None) -> dict[str, Any]:
         height=height,
         aspect_ratio=aspect_ratio,
         has_alpha=has_alpha,
+        transparency_ratio=transparency_ratio,
         dominant_color=f"rgb{dominant_rgb} ({color})",
+        palette_summary=palette,
         brightness=brightness,
         contrast=contrast,
         likely_render_finish=render_finish,
@@ -548,10 +794,13 @@ def trait_extraction_markdown(traits: dict[str, Any]) -> str:
     if not traits.get("ok"):
         return f"## Base image traits\n{traits.get('error', 'No traits extracted.')}"
     notes = "\n".join(f"- {note}" for note in traits.get("notes", []))
+    palette = ", ".join(traits.get("palette_summary") or ["no palette summary"])
     return (
         "## Base image traits extracted\n"
         f"- Size: `{traits['width']}x{traits['height']}` ({traits['suggested_body_framing']})\n"
         f"- Dominant color: `{traits['dominant_color']}`\n"
+        f"- Palette: `{palette}`\n"
+        f"- Transparency: `{traits.get('transparency_ratio', 0)}`\n"
         f"- Brightness / contrast: `{traits['brightness']}` / `{traits['contrast']}`\n"
         f"- Suggested material: `{traits['suggested_material']}`\n"
         f"- Suggested render finish: `{traits['likely_render_finish']}`\n\n"
@@ -668,15 +917,27 @@ def compile_prompt_sections(metadata: dict[str, Any]) -> dict[str, str]:
     body_prompt = (
         f"{body['archetype']}, {body['height']}, {body['build']}, {body['chest']} chest, "
         f"{body['hips']} hips, {body['waist']} waist, {body['posture']} posture, "
+        f"{body.get('shoulder_hip_balance', 'balanced shoulders/hips')}, "
+        f"{body.get('limb_length', 'average limbs')}, {body.get('glute_leg_emphasis', 'balanced lower body')}, "
+        f"{body.get('framing', 'half-body scoring frame')}, "
         f"muscle {body['proportions']['muscle_definition']:.2f}, softness {body['proportions']['softness']:.2f}"
     )
-    face_prompt = f"{face['shape']}, {face['eyes']} eyes, {face['expression']}, {face['makeup']}"
-    hair_prompt = f"{hair['style']}, {hair['color']}, {hair['notes']}"
+    face_prompt = (
+        f"{face['shape']}, {face['eyes']} eyes, {face.get('eye_color', 'natural brown')}, "
+        f"{face['expression']}, expression intensity {face.get('expression_intensity', 0.5):.2f}, "
+        f"brow intensity {face.get('brow_intensity', 0.5):.2f}, {face.get('mouth_feature', 'natural mouth')}, {face['makeup']}"
+    )
+    hair_prompt = (
+        f"{hair['style']}, {hair['color']}, {hair.get('ear_style', 'human ears')}, "
+        f"{hair.get('head_ornaments', 'none')}, {hair.get('race_feature_separation', '')}, {hair['notes']}"
+    )
     futa_prompt = (
         f"{futa['preset']}, {futa['size']} proportions, {futa['shape']}, {futa['details']}, "
-        f"{futa['motion_stability']}, {futa['shape_lock']}, {futa['material_match']}, "
-        f"{futa['body_integration']}, {futa['visibility']}, {futa['contact_behavior']}, "
-        f"{futa['pressure_response']}, {futa['regeneration_strictness']}"
+        f"{futa['motion_stability']}, {futa['shape_lock']}, {futa.get('silhouette_lock', '')}, "
+        f"{futa['material_match']}, {futa.get('material_continuity', '')}, {futa['body_integration']}, "
+        f"{futa.get('root_alignment', '')}, {futa['visibility']}, {futa.get('visibility_framing', '')}, "
+        f"{futa['contact_behavior']}, {futa.get('contact_readability', '')}, {futa['pressure_response']}, "
+        f"{futa.get('pressure_readability', '')}, {futa['regeneration_strictness']}, {futa.get('scoring_retry_policy', '')}"
     )
     slime = material.get("slime", {})
     slime_prompt = ""
@@ -693,6 +954,8 @@ def compile_prompt_sections(metadata: dict[str, Any]) -> dict[str, str]:
             material["skin_material"],
             material["skin_tone"],
             material["render_finish"],
+            material.get("lighting", ""),
+            material.get("detail_level", ""),
             slime_prompt,
             f"latex gloss {material['latex']['gloss']:.2f}, elasticity {material['latex']['elasticity']:.2f}" if material.get("type") == "latex" else "",
         ]
@@ -700,13 +963,19 @@ def compile_prompt_sections(metadata: dict[str, Any]) -> dict[str, str]:
     )
     physics_prompt = (
         "General Physics Base LoRA, "
-        f"{physics['motion']}, priority {physics['priority']}, contact {physics['contact']:.2f}, "
+        f"{physics['motion']}, {physics.get('secondary_motion', 'minimal secondary motion')}, priority {physics['priority']}, contact {physics['contact']:.2f}, "
         f"stretch {physics['stretch']:.2f}, deformation {physics['deformation']:.2f}, "
         f"jiggle {physics['jiggle']:.2f}, flow {physics['flow']:.2f}, stable anatomy, "
         "readable contact, material continuity"
     )
     style_prompt = f"{metadata['prompts']['style']}, {metadata['material_rendering']['render_finish']}"
-    behavior_prompt = ", ".join(_unique(behavior.get("personality_tags", []) + behavior.get("behavior_tags", [])))
+    behavior_prompt = ", ".join(
+        _unique(
+            behavior.get("personality_tags", [])
+            + behavior.get("behavior_tags", [])
+            + [behavior.get("gaze", ""), behavior.get("interaction_distance", ""), f"behavior intensity {behavior.get('intensity', 0.5):.2f}"]
+        )
+    )
     negative = ", ".join(
         _unique(
             [
@@ -741,6 +1010,8 @@ def compile_prompt_sections(metadata: dict[str, Any]) -> dict[str, str]:
             material_prompt,
             metadata["outfit_accessories"]["style"],
             metadata["outfit_accessories"]["accessories"],
+            metadata["outfit_accessories"].get("coverage", ""),
+            metadata["outfit_accessories"].get("accessory_priority", ""),
             behavior_prompt,
             physics_prompt,
             style_prompt,
@@ -862,13 +1133,24 @@ def build_character_metadata(
     muscle: float,
     softness: float,
     posture: str,
+    shoulder_hip_balance: str,
+    limb_length: str,
+    glute_leg_emphasis: str,
+    body_framing: str,
     face_shape: str,
     eye_style: str,
     expression: str,
     makeup: str,
+    eye_color: str,
+    brow_intensity: float,
+    mouth_feature: str,
+    expression_intensity: float,
     hair_style: str,
     hair_color: str,
     head_feature_notes: str,
+    ear_style: str,
+    head_ornaments: str,
+    race_feature_separation: str,
     futa_size: str,
     futa_shape: str,
     futa_details: str,
@@ -876,25 +1158,40 @@ def build_character_metadata(
     anatomy_consistency: str,
     futa_proportion_scale: float,
     futa_shape_lock: str,
+    futa_silhouette_lock: str,
     futa_material_match: str,
+    futa_material_continuity: str,
     futa_body_integration: str,
+    futa_root_alignment: str,
     futa_visibility: str,
+    futa_visibility_framing: str,
     futa_contact_behavior: str,
+    futa_contact_readability: str,
     futa_pressure_response: str,
+    futa_pressure_readability: str,
     futa_regeneration_strictness: str,
+    futa_scoring_retry_policy: str,
     futa_negative_helpers: list[str] | str,
     skin_material: str,
     skin_tone: str,
     render_finish: str,
+    material_lighting: str,
+    render_detail: str,
     outfit_style: str,
     accessories: str,
+    outfit_coverage: str,
+    accessory_priority: str,
     behavior_tags: str,
+    gaze_behavior: str,
+    interaction_distance: str,
+    behavior_intensity: float,
     motion_emphasis: str,
     contact_emphasis: float,
     stretch_emphasis: float,
     deformation_emphasis: float,
     jiggle_emphasis: float,
     flow_emphasis: float,
+    secondary_motion: str,
     slime_viscosity: float,
     slime_translucency: float,
     slime_bubble_density: float,
@@ -980,9 +1277,38 @@ def build_character_metadata(
             "extracted_traits": extracted_traits if extracted_traits.get("ok") else None,
             "extraction_error": extracted_traits.get("error") if extracted_traits and not extracted_traits.get("ok") else "",
         },
-        "body": {"archetype": body_archetype, "height": height, "build": build, "chest": chest, "hips": hips, "waist": waist, "posture": posture, "proportions": {"muscle_definition": round(float(muscle), 2), "softness": round(float(softness), 2)}},
-        "face": {"shape": face_shape, "eyes": eye_style, "expression": expression, "makeup": makeup},
-        "hair_head_features": {"style": hair_style, "color": hair_color, "notes": head_feature_notes},
+        "body": {
+            "archetype": body_archetype,
+            "height": height,
+            "build": build,
+            "chest": chest,
+            "hips": hips,
+            "waist": waist,
+            "posture": posture,
+            "shoulder_hip_balance": shoulder_hip_balance,
+            "limb_length": limb_length,
+            "glute_leg_emphasis": glute_leg_emphasis,
+            "framing": body_framing,
+            "proportions": {"muscle_definition": round(float(muscle), 2), "softness": round(float(softness), 2)},
+        },
+        "face": {
+            "shape": face_shape,
+            "eyes": eye_style,
+            "eye_color": eye_color,
+            "expression": expression,
+            "expression_intensity": round(float(expression_intensity), 2),
+            "brow_intensity": round(float(brow_intensity), 2),
+            "mouth_feature": mouth_feature,
+            "makeup": makeup,
+        },
+        "hair_head_features": {
+            "style": hair_style,
+            "color": hair_color,
+            "ear_style": ear_style,
+            "head_ornaments": head_ornaments,
+            "race_feature_separation": race_feature_separation,
+            "notes": head_feature_notes,
+        },
         "futa_anatomy": {
             "preset": futa_category,
             "size": futa_size,
@@ -992,12 +1318,19 @@ def build_character_metadata(
             "consistency_priority": anatomy_consistency,
             "proportion_scale": round(float(futa_proportion_scale), 2),
             "shape_lock": futa_shape_lock,
+            "silhouette_lock": futa_silhouette_lock,
             "material_match": futa_material_match,
+            "material_continuity": futa_material_continuity,
             "body_integration": futa_body_integration,
+            "root_alignment": futa_root_alignment,
             "visibility": futa_visibility,
+            "visibility_framing": futa_visibility_framing,
             "contact_behavior": futa_contact_behavior,
+            "contact_readability": futa_contact_readability,
             "pressure_response": futa_pressure_response,
+            "pressure_readability": futa_pressure_readability,
             "regeneration_strictness": futa_regeneration_strictness,
+            "scoring_retry_policy": futa_scoring_retry_policy,
             "negative_helpers": _split_tags(futa_negative_helpers),
             "scene_focus": "adult futa partner with male counterpart composition support",
         },
@@ -1007,6 +1340,8 @@ def build_character_metadata(
             "skin_material": skin_material,
             "skin_tone": skin_tone,
             "render_finish": render_finish,
+            "lighting": material_lighting,
+            "detail_level": render_detail,
             "slime": {
                 "body_type": slime_body_type,
                 "viscosity_profile": slime_viscosity_profile,
@@ -1028,10 +1363,27 @@ def build_character_metadata(
             },
             "latex": {"gloss": round(float(latex_gloss), 2), "elasticity": round(float(latex_elasticity), 2)},
         },
-        "outfit_accessories": {"style": outfit_style, "accessories": accessories},
+        "outfit_accessories": {"style": outfit_style, "accessories": accessories, "coverage": outfit_coverage, "accessory_priority": accessory_priority},
         "race_traits": {"animal_ears": animal_ears, "animal_tail_style": animal_tail_style, "tail_count": int(tail_count), "horn_style": horn_style, "wing_style": wing_style, "scale_pattern": scale_pattern, "synthetic_finish": synthetic_finish, "eldritch_intensity": round(float(eldritch_intensity), 2), "alien_palette": alien_palette},
-        "behavior": {"personality_tags": _split_tags(personality_tags), "behavior_tags": _split_tags(behavior_tags), "director_notes": creator_notes.strip()},
-        "physics_emphasis": {"motion": motion_emphasis, "priority": physics_priority, "large_frame": "large_body" in sections, "contact": round(float(contact_emphasis), 2), "stretch": round(float(stretch_emphasis), 2), "deformation": round(float(deformation_emphasis), 2), "jiggle": round(float(jiggle_emphasis), 2), "flow": round(float(flow_emphasis), 2)},
+        "behavior": {
+            "personality_tags": _split_tags(personality_tags),
+            "behavior_tags": _split_tags(behavior_tags),
+            "gaze": gaze_behavior,
+            "interaction_distance": interaction_distance,
+            "intensity": round(float(behavior_intensity), 2),
+            "director_notes": creator_notes.strip(),
+        },
+        "physics_emphasis": {
+            "motion": motion_emphasis,
+            "secondary_motion": secondary_motion,
+            "priority": physics_priority,
+            "large_frame": "large_body" in sections,
+            "contact": round(float(contact_emphasis), 2),
+            "stretch": round(float(stretch_emphasis), 2),
+            "deformation": round(float(deformation_emphasis), 2),
+            "jiggle": round(float(jiggle_emphasis), 2),
+            "flow": round(float(flow_emphasis), 2),
+        },
         "prompts": {"style": style_preset},
         "training": {"base_lora": "general_physics", "caption_hints": list(pack.tags), "recommended_rank": 12 if pack.family in {"advanced", "signature"} else 8, "hint": pack.training_hint, "lora_strength_target": 0.85, "minimum_scored_images": 10},
         "library": {"tags": tags, "thumbnail": None, "score_history": []},
@@ -1353,7 +1705,7 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
 
             with gr.Accordion("Body Proportions", open=True) as body_section:
                 with gr.Row():
-                    height = gr.Dropdown(["short adult", "average", "tall", "very tall fantasy"], value="average", label="Height category")
+                    height = gr.Dropdown(["short adult", "average", "tall", "very tall fantasy"], value="average", label="Height category", info="Adult body framing only; avoid childlike proportions.")
                     build = gr.Dropdown(BODY_ARCHETYPES, value="Balanced athletic", label="Detailed build")
                     posture = gr.Dropdown(["relaxed", "confident contrapposto", "dominant stance", "soft approachable", "action-ready"], value="confident contrapposto", label="Posture")
                 with gr.Row():
@@ -1361,8 +1713,13 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
                     hips = gr.Dropdown(["narrow", "balanced", "curvy", "wide", "powerful"], value="curvy", label="Hips")
                     waist = gr.Dropdown(["straight", "subtle taper", "defined", "dramatic taper"], value="defined", label="Waist")
                 with gr.Row():
+                    shoulder_hip_balance = gr.Dropdown(BODY_BALANCE_OPTIONS, value="balanced shoulders/hips", label="Shoulder / hip balance", info="Controls the big silhouette read before details.")
+                    limb_length = gr.Dropdown(LIMB_LENGTH_OPTIONS, value="average limbs", label="Limb length")
+                    glute_leg_emphasis = gr.Dropdown(GLUTE_LEG_OPTIONS, value="balanced lower body", label="Glute / leg emphasis")
+                with gr.Row():
                     muscle = gr.Slider(0, 1, value=0.45, step=0.05, label="Muscle definition")
                     softness = gr.Slider(0, 1, value=0.45, step=0.05, label="Softness")
+                    body_framing = gr.Dropdown(BODY_FRAMING_OPTIONS, value="multi-character compatible frame", label="Body framing", info="Used in prompt and preview metadata for crop/scoring intent.")
 
             with gr.Accordion("Face and Expression", open=True) as face_section:
                 with gr.Row():
@@ -1371,17 +1728,27 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
                 with gr.Row():
                     expression = gr.Dropdown(["soft smile", "confident smirk", "playful tease", "gentle focus", "commanding gaze", "curious look"], value="confident smirk", label="Expression")
                     makeup = gr.Dropdown(["none", "natural", "gloss lips", "gothic", "fantasy markings", "glowing liner"], value="natural", label="Makeup / markings")
+                with gr.Row():
+                    eye_color = gr.Dropdown(FACE_EYE_COLOR_OPTIONS, value="green", label="Eye color / glow")
+                    mouth_feature = gr.Dropdown(FACE_MOUTH_FEATURE_OPTIONS, value="natural mouth", label="Mouth / fang feature")
+                with gr.Row():
+                    brow_intensity = gr.Slider(0, 1, value=0.35, step=0.05, label="Brow intensity")
+                    expression_intensity = gr.Slider(0, 1, value=0.55, step=0.05, label="Expression intensity", info="Higher values make the expression easier to score at low resolution.")
 
             with gr.Accordion("Hair and Head Features", open=True) as hair_section:
                 with gr.Row():
                     hair_style = gr.Dropdown(["long flowing", "short layered", "wavy shoulder-length", "sleek ponytail", "wild textured", "bald / minimal", "slime tendrils"], value="long flowing", label="Hair style")
                     hair_color = gr.Textbox(label="Hair / material color", value="natural dark")
+                with gr.Row():
+                    ear_style = gr.Dropdown(HAIR_EAR_STYLE_OPTIONS, value="human ears", label="Ear style")
+                    head_ornaments = gr.Dropdown(HEAD_ORNAMENT_OPTIONS, value="none", label="Head ornaments")
                 head_feature_notes = gr.Textbox(label="Head feature notes", value="keep race-specific ears/horns separate from hair silhouette")
+                race_feature_separation = gr.Textbox(label="Race feature separation", value="keep ears, horns, wings, and hair as separate readable silhouettes")
 
             with gr.Accordion("Futa-Specific Anatomy", open=True) as futa_section:
                 gr.Markdown("Emphasis is on adult futa-on-male scene readiness: readable silhouette, stable proportions, and continuity across scoring images.")
                 with gr.Row():
-                    futa_size = gr.Dropdown(FUTA_SIZE_OPTIONS, value="prominent", label="Size emphasis")
+                    futa_size = gr.Dropdown(FUTA_SIZE_OPTIONS, value="prominent", label="Size emphasis", info="Prompt emphasis only; scoring still favors anatomical stability.")
                     futa_shape = gr.Dropdown(FUTA_SHAPE_OPTIONS, value="natural tapered", label="Shape language")
                 with gr.Row():
                     futa_details = gr.Dropdown(FUTA_DETAIL_OPTIONS, value="vein/detail light", label="Detail level")
@@ -1390,14 +1757,23 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
                 with gr.Row():
                     futa_proportion_scale = gr.Slider(0.5, 1.8, value=1.0, step=0.05, label="Proportion scale")
                     futa_shape_lock = gr.Dropdown(FUTA_SHAPE_LOCK_OPTIONS, value="strict silhouette lock", label="Shape consistency lock")
+                    futa_silhouette_lock = gr.Dropdown(FUTA_SILHOUETTE_LOCK_OPTIONS, value="front-readable silhouette", label="Silhouette lock")
+                with gr.Row():
                     futa_material_match = gr.Dropdown(FUTA_MATERIAL_MATCH_OPTIONS, value="match body skin/material", label="Material matching")
+                    futa_material_continuity = gr.Dropdown(FUTA_MATERIAL_CONTINUITY_OPTIONS, value="body-material continuous", label="Material continuity")
+                    futa_root_alignment = gr.Dropdown(FUTA_ROOT_ALIGNMENT_OPTIONS, value="stable pelvis/root alignment", label="Root alignment")
                 with gr.Row():
                     futa_body_integration = gr.Dropdown(FUTA_BODY_INTEGRATION_OPTIONS, value="stable pelvis/root alignment", label="Body integration")
                     futa_visibility = gr.Dropdown(FUTA_VISIBILITY_OPTIONS, value="clear scoring visibility", label="Visibility / camera emphasis")
+                    futa_visibility_framing = gr.Dropdown(FUTA_VISIBILITY_FRAMING_OPTIONS, value="multi-character readable framing", label="Visibility framing")
+                with gr.Row():
                     futa_regeneration_strictness = gr.Dropdown(FUTA_REGEN_OPTIONS, value="strict anatomy retry", label="Regeneration strictness")
+                    futa_scoring_retry_policy = gr.Dropdown(FUTA_SCORING_RETRY_OPTIONS, value="retry on anatomy drift", label="Scoring retry policy")
                 with gr.Row():
                     futa_contact_behavior = gr.Dropdown(FUTA_CONTACT_OPTIONS, value="pressure-readable contact", label="Contact behavior")
+                    futa_contact_readability = gr.Dropdown(FUTA_CONTACT_READABILITY_OPTIONS, value="pressure-readable contact zones", label="Contact readability")
                     futa_pressure_response = gr.Dropdown(FUTA_PRESSURE_OPTIONS, value="clear indentation cues", label="Pressure response")
+                    futa_pressure_readability = gr.Dropdown(FUTA_PRESSURE_READABILITY_OPTIONS, value="clear pressure landmarks", label="Pressure readability")
                 futa_negative_helpers = gr.CheckboxGroup(FUTA_NEGATIVE_HELPERS, value=["unstable anatomy", "extra anatomy", "detached anatomy", "scale mismatch"], label="Negative prompt helpers")
 
             with gr.Accordion("Skin, Material & Rendering", open=True) as skin_section:
@@ -1405,19 +1781,30 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
                     skin_material = gr.Dropdown(["natural skin", "translucent slime", "gloss latex", "synthetic skin", "scaled skin", "pearlescent aquatic", "void gradient"], value="natural skin", label="Skin/material type")
                     skin_tone = gr.Textbox(label="Skin tone / tint", value="warm tan")
                     render_finish = gr.Dropdown(["soft studio", "cinematic", "glossy material study", "matte painterly", "wet specular", "neon rim-lit"], value="soft studio", label="Rendering finish")
+                with gr.Row():
+                    material_lighting = gr.Dropdown(MATERIAL_LIGHTING_OPTIONS, value="soft key light", label="Material lighting")
+                    render_detail = gr.Dropdown(RENDER_DETAIL_OPTIONS, value="balanced detail", label="Render detail", info="Use lower detail for motion-preview stability.")
 
             with gr.Accordion("Outfit and Accessories", open=True) as outfit_section:
                 with gr.Row():
                     outfit_style = gr.Dropdown(["minimal character sheet", "fantasy lingerie", "bodysuit", "robes", "armor accents", "clubwear", "nude material study"], value="minimal character sheet", label="Outfit style")
                     accessories = gr.Textbox(label="Accessories", value="simple jewelry, optional collar, readable silhouette")
+                with gr.Row():
+                    outfit_coverage = gr.Dropdown(OUTFIT_COVERAGE_OPTIONS, value="minimal silhouette-safe", label="Outfit coverage")
+                    accessory_priority = gr.Dropdown(ACCESSORY_PRIORITY_OPTIONS, value="silhouette first", label="Accessory priority")
 
             with gr.Accordion("Personality & Behavior Tags", open=True) as behavior_section:
                 behavior_tags = gr.Textbox(label="Additional behavior tags", value="adult, confident partner, male-focused composition")
+                with gr.Row():
+                    gaze_behavior = gr.Dropdown(GAZE_BEHAVIOR_OPTIONS, value="focused on male counterpart", label="Gaze behavior")
+                    interaction_distance = gr.Dropdown(INTERACTION_DISTANCE_OPTIONS, value="contact-ready two-character spacing", label="Interaction distance")
+                    behavior_intensity = gr.Slider(0, 1, value=0.5, step=0.05, label="Behavior intensity")
 
             with gr.Accordion("Physics Emphasis", open=True) as physics_section:
                 motion_emphasis = gr.Dropdown(["stable humanoid motion", "agile motion", "heavy-body weight transfer", "tail/wing secondary motion", "elastic material response", "slime flow with shape re-lock"], value="stable humanoid motion", label="Physics / motion emphasis")
+                secondary_motion = gr.Dropdown(SECONDARY_MOTION_OPTIONS, value="hair follow-through", label="Secondary motion priority")
                 with gr.Row():
-                    contact_emphasis = gr.Slider(0, 1, value=0.65, step=0.05, label="Contact readability")
+                    contact_emphasis = gr.Slider(0, 1, value=0.65, step=0.05, label="Contact readability", info="Weighted scoring favors clear contact boundaries.")
                     stretch_emphasis = gr.Slider(0, 1, value=0.35, step=0.05, label="Stretch")
                     deformation_emphasis = gr.Slider(0, 1, value=0.35, step=0.05, label="Deformation")
                 with gr.Row():
@@ -1521,12 +1908,18 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
             race, mode, focus_preset, body_archetype, futa_category, personality_tags, style_preset,
             physics_priority, material_emphasis,
             character_name, tagline, secondary_pack, trigger_words, creator_notes, base_image_path, base_image_strength, base_image_notes, base_image_traits_json,
-            height, build, chest, hips, waist, muscle, softness, posture,
-            face_shape, eye_style, expression, makeup, hair_style, hair_color, head_feature_notes,
+            height, build, chest, hips, waist, muscle, softness, posture, shoulder_hip_balance, limb_length, glute_leg_emphasis, body_framing,
+            face_shape, eye_style, expression, makeup, eye_color, brow_intensity, mouth_feature, expression_intensity,
+            hair_style, hair_color, head_feature_notes, ear_style, head_ornaments, race_feature_separation,
             futa_size, futa_shape, futa_details, futa_motion_stability, anatomy_consistency,
-            futa_proportion_scale, futa_shape_lock, futa_material_match, futa_body_integration, futa_visibility, futa_contact_behavior, futa_pressure_response, futa_regeneration_strictness, futa_negative_helpers,
-            skin_material, skin_tone, render_finish, outfit_style, accessories, behavior_tags,
-            motion_emphasis, contact_emphasis, stretch_emphasis, deformation_emphasis, jiggle_emphasis, flow_emphasis,
+            futa_proportion_scale, futa_shape_lock, futa_silhouette_lock, futa_material_match, futa_material_continuity,
+            futa_body_integration, futa_root_alignment, futa_visibility, futa_visibility_framing, futa_contact_behavior,
+            futa_contact_readability, futa_pressure_response, futa_pressure_readability, futa_regeneration_strictness,
+            futa_scoring_retry_policy, futa_negative_helpers,
+            skin_material, skin_tone, render_finish, material_lighting, render_detail,
+            outfit_style, accessories, outfit_coverage, accessory_priority,
+            behavior_tags, gaze_behavior, interaction_distance, behavior_intensity,
+            motion_emphasis, contact_emphasis, stretch_emphasis, deformation_emphasis, jiggle_emphasis, flow_emphasis, secondary_motion,
             slime_viscosity, slime_translucency, slime_bubble_density, slime_flow_intensity, slime_shape_stability, slime_tint, slime_gloss, slime_cohesion, slime_futa_options,
             slime_body_type, slime_viscosity_profile, slime_translucency_profile, slime_bubble_profile, slime_flow_profile, slime_reformation, slime_drip_control, slime_shape_retention,
             latex_gloss, latex_elasticity, animal_ears, animal_tail_style, tail_count, horn_style, wing_style,
@@ -1537,10 +1930,19 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
         adaptive_sections = [body_section, face_section, hair_section, futa_section, skin_section, outfit_section, behavior_section, physics_section, slime_section, latex_section, animal_section, horns_section, wings_section, tails_section, scales_section, synthetic_section, eldritch_section, alien_section, large_body_section, aquatic_section]
         race_outputs = [
             guidance, *adaptive_sections,
-            futa_category, animal_ears, tail_count, horn_style, wing_style, scale_pattern, synthetic_finish, alien_palette,
+            futa_category, animal_ears, animal_tail_style, tail_count, horn_style, wing_style, scale_pattern, synthetic_finish, alien_palette,
+            shoulder_hip_balance, limb_length, glute_leg_emphasis, body_framing,
+            eye_color, brow_intensity, mouth_feature, expression_intensity,
+            ear_style, head_ornaments, race_feature_separation,
             motion_emphasis, skin_material, futa_size, futa_shape, futa_details, futa_motion_stability,
-            physics_priority, material_emphasis, futa_shape_lock, futa_material_match, futa_body_integration, futa_visibility,
-            futa_contact_behavior, futa_pressure_response, futa_regeneration_strictness, futa_negative_helpers,
+            physics_priority, material_emphasis, futa_shape_lock, futa_silhouette_lock, futa_material_match, futa_material_continuity,
+            futa_body_integration, futa_root_alignment, futa_visibility, futa_visibility_framing,
+            futa_contact_behavior, futa_contact_readability, futa_pressure_response, futa_pressure_readability,
+            futa_regeneration_strictness, futa_scoring_retry_policy, futa_negative_helpers,
+            material_lighting, render_detail, outfit_coverage, accessory_priority,
+            gaze_behavior, interaction_distance, behavior_intensity, secondary_motion,
+            slime_viscosity, slime_translucency, slime_bubble_density, slime_flow_intensity, slime_shape_stability,
+            slime_tint, slime_gloss, slime_cohesion, slime_futa_options,
             slime_body_type, slime_viscosity_profile, slime_translucency_profile, slime_bubble_profile, slime_flow_profile,
             slime_reformation, slime_drip_control, slime_shape_retention, preview_resolution, preview_denoise, preview_checklist,
         ]
@@ -1555,7 +1957,20 @@ def build_character_creator_tab(initial_interactive: bool = True, scoring_target
                 race, body_archetype, futa_category, personality_tags, style_preset,
                 futa_size, futa_shape, futa_details, futa_motion_stability, motion_emphasis,
                 physics_priority, material_emphasis, contact_emphasis, stretch_emphasis,
-                deformation_emphasis, jiggle_emphasis, flow_emphasis, slime_body_type, slime_shape_retention,
+                deformation_emphasis, jiggle_emphasis, flow_emphasis,
+                shoulder_hip_balance, limb_length, glute_leg_emphasis, body_framing,
+                eye_color, brow_intensity, mouth_feature, expression_intensity,
+                ear_style, head_ornaments, race_feature_separation,
+                futa_shape_lock, futa_silhouette_lock, futa_material_match, futa_material_continuity,
+                futa_body_integration, futa_root_alignment, futa_visibility, futa_visibility_framing,
+                futa_contact_behavior, futa_contact_readability, futa_pressure_response, futa_pressure_readability,
+                futa_regeneration_strictness, futa_scoring_retry_policy, futa_negative_helpers,
+                material_lighting, render_detail, outfit_coverage, accessory_priority,
+                gaze_behavior, interaction_distance, behavior_intensity, secondary_motion,
+                slime_viscosity, slime_translucency, slime_bubble_density, slime_flow_intensity,
+                slime_shape_stability, slime_tint, slime_gloss, slime_cohesion, slime_futa_options,
+                slime_body_type, slime_viscosity_profile, slime_translucency_profile, slime_bubble_profile,
+                slime_flow_profile, slime_reformation, slime_drip_control, slime_shape_retention,
             ],
         ).then(adaptive_section_update, inputs=[race, secondary_pack], outputs=section_outputs)
         randomize_button.click(randomize_basic, inputs=race, outputs=[body_archetype, futa_category, personality_tags, style_preset, physics_priority, material_emphasis])
