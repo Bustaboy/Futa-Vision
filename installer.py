@@ -51,7 +51,7 @@ APP_SETTINGS_PATH = SETTINGS_DIR / "futa_vision_settings.json"
 ENV_PATH = ROOT / ".env"
 ENV_EXAMPLE_PATH = ROOT / ".env.example"
 
-def _load_rich() -> tuple[Any, Any, Any, Any, Any, Any, Any]:
+def _load_rich() -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
     """Load rich when available, otherwise provide tiny console fallbacks."""
 
     if importlib.util.find_spec("rich") is not None:
@@ -162,6 +162,34 @@ class HardwareProfile(str, Enum):
     CLOUD_RECOMMENDED = "cloud_recommended"
 
 
+PROFILE_SETTINGS: dict[HardwareProfile, dict[str, str]] = {
+    HardwareProfile.LOCAL_LOW_VRAM: {
+        "resolution": "1280x720 (720p)",
+        "batch_size": "1",
+        "precision": "FP8/GGUF/quantized where supported",
+        "training": "low-rank LoRA, gradient checkpointing, disk cache",
+        "clip_strategy": "short clips first, smart-loop extension, final upscale after assembly",
+        "cloud_trigger": "Wan final clips, long duration, heavy upscale, or any CUDA OOM",
+    },
+    HardwareProfile.LOCAL_STANDARD: {
+        "resolution": "720p previews; 1080p only after a successful short test",
+        "batch_size": "1-2 depending on free VRAM",
+        "precision": "FP16/BF16 when stable; FP8 fallback for larger workflows",
+        "training": "LoRA rank may be increased after cache/VRAM checks",
+        "clip_strategy": "local previews and medium final clips",
+        "cloud_trigger": "very long Wan jobs, large batch experiments, or repeated OOMs",
+    },
+    HardwareProfile.CLOUD_RECOMMENDED: {
+        "resolution": "local diagnostics only; run GPU generation in cloud",
+        "batch_size": "1",
+        "precision": "cloud worker decides based on GPU template",
+        "training": "offload training to RunPod or another CUDA host",
+        "clip_strategy": "use local UI/library/timeline; offload generation",
+        "cloud_trigger": "default for generation until CUDA is available locally",
+    },
+}
+
+
 @dataclass(slots=True)
 class GPUInfo:
     """Normalized GPU status collected by torch or nvidia-smi."""
@@ -187,6 +215,18 @@ class HardwareReport:
     profile_reason: str
     warnings: list[str] = field(default_factory=list)
     recommendations: list[str] = field(default_factory=list)
+    profile_settings: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RepairSuggestion:
+    """Actionable recovery guidance for non-technical users."""
+
+    area: str
+    severity: str
+    symptom: str
+    actions: list[str]
+    command: str | None = None
 
 
 @dataclass(slots=True)
@@ -280,6 +320,23 @@ PINOKIO_APP_MARKERS = {
     "futa_vision": ["Futa-Vision", "futa-vision", "futa_vision"],
 }
 
+COMFYUI_EXPECTED_DIRS = [
+    "models",
+    "models/checkpoints",
+    "models/loras",
+    "models/vae",
+    "custom_nodes",
+]
+
+COMFYUI_NODE_HINTS = [
+    "ComfyUI-Manager",
+    "ComfyUI-VideoHelperSuite",
+    "ComfyUI-LTXVideo",
+    "ComfyUI-WanVideoWrapper",
+]
+
+CACHE_RESET_TARGETS = [ROOT / "cache", ROOT / "outputs" / "timelines" / "previews"]
+
 
 class InstallerError(RuntimeError):
     """Raised for expected installer failures with repair suggestions."""
@@ -319,6 +376,26 @@ def run_command(command: list[str], timeout: int = 30) -> subprocess.CompletedPr
         return subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
     except (FileNotFoundError, subprocess.SubprocessError, OSError):
         return None
+
+
+def run_with_status(message: str, action: Any) -> Any:
+    """Run an installer step with a Rich status spinner when available."""
+
+    status_factory = getattr(CONSOLE, "status", None)
+    if callable(status_factory):
+        with status_factory(message):
+            return action()
+    CONSOLE.print(message)
+    return action()
+
+
+def render_step(number: int, total: int, title: str, detail: str = "") -> None:
+    """Render a friendly wizard step header."""
+
+    body = f"[bold]Step {number}/{total}: {title}[/bold]"
+    if detail:
+        body += f"\n{detail}"
+    CONSOLE.print(Panel(body, border_style="cyan"))
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -603,35 +680,62 @@ def disk_free_gb(path: Path) -> float:
     return round(usage.free / BYTES_PER_GIB, 2)
 
 
+def profile_recommendations(profile: HardwareProfile, gpu: GPUInfo) -> list[str]:
+    """Return clear VRAM/profile-specific user recommendations."""
+
+    settings = PROFILE_SETTINGS[profile]
+    base = [
+        f"Resolution default: {settings['resolution']}.",
+        f"Batch size: {settings['batch_size']}.",
+        f"Precision/model loading: {settings['precision']}.",
+        f"Training defaults: {settings['training']}.",
+        f"Video strategy: {settings['clip_strategy']}.",
+        f"Use cloud when: {settings['cloud_trigger']}.",
+    ]
+    if profile == HardwareProfile.LOCAL_LOW_VRAM:
+        base.insert(
+            0,
+            "8 GB / low-VRAM profile: keep everything conservative until a short clip succeeds; this is the safest default for RTX 4070 8 GB systems.",
+        )
+        if gpu.free_vram_gb is not None and gpu.free_vram_gb < 6:
+            base.append("Free VRAM is currently below 6 GB; close browsers/games/other CUDA apps before generation.")
+    elif profile == HardwareProfile.CLOUD_RECOMMENDED:
+        base.insert(0, "Cloud profile: run the UI locally but offload generation/training to RunPod or another CUDA machine.")
+    return base
+
+
 def build_hardware_report() -> HardwareReport:
-    """Create a hardware report with RTX 4070/8 GB low-VRAM guidance."""
+    """Create a hardware report with explicit VRAM-based recommendations."""
 
     gpu, torch_available = detect_gpu()
     cache_free = disk_free_gb(ROOT / "cache")
     warnings: list[str] = []
-    recommendations = [
-        "Use 720p local generation first, then upscale final exports.",
-        "Keep batch size at 1 for starter images, clips, and LoRA training.",
-        "Prefer FP8/GGUF/quantized workflows and disk caching where ComfyUI nodes support them.",
-        "Use RunPod or another cloud GPU for long Wan jobs, heavy upscales, or repeated OOMs.",
-    ]
 
     if not gpu.cuda_available:
         profile = HardwareProfile.CLOUD_RECOMMENDED
         reason = "No CUDA-capable NVIDIA GPU was detected."
         warnings.append("Local AI generation will be limited; configure RunPod for full workflows.")
-    elif gpu.total_vram_gb is not None and gpu.total_vram_gb <= LOW_VRAM_THRESHOLD_GB:
+    elif gpu.total_vram_gb is None:
         profile = HardwareProfile.LOCAL_LOW_VRAM
-        reason = f"Detected {gpu.total_vram_gb} GB VRAM, which is at or below the {LOW_VRAM_THRESHOLD_GB} GB low-VRAM threshold."
+        reason = "CUDA is available, but VRAM could not be measured; conservative low-VRAM defaults are safest."
+        warnings.append("VRAM size is unknown; verify nvidia-smi and PyTorch CUDA before heavy jobs.")
+    elif gpu.total_vram_gb <= LOW_VRAM_THRESHOLD_GB:
+        profile = HardwareProfile.LOCAL_LOW_VRAM
+        reason = f"Detected {gpu.total_vram_gb} GB VRAM, at or below the {LOW_VRAM_THRESHOLD_GB} GB low-VRAM threshold."
         if "4070" in gpu.name and gpu.total_vram_gb <= RTX_4070_EXPECTED_VRAM_GB + 0.75:
-            reason = "Detected an RTX 4070-class 8 GB GPU; the low-VRAM profile is recommended."
-            recommendations.insert(0, "RTX 4070 8 GB: use local_low_vram, 720p previews, low-rank training, and cloud fallback for final-heavy clips.")
+            reason = "Detected an RTX 4070-class 8 GB GPU; use the detailed local_low_vram profile."
     else:
         profile = HardwareProfile.LOCAL_STANDARD
-        reason = f"Detected CUDA GPU with {gpu.total_vram_gb or 'unknown'} GB VRAM."
+        reason = f"Detected CUDA GPU with {gpu.total_vram_gb} GB VRAM."
 
     if cache_free < MIN_CACHE_FREE_GB:
         warnings.append(f"Cache drive has {cache_free} GB free; {MIN_CACHE_FREE_GB} GB or more is recommended for video workflows.")
+
+    recommendations = profile_recommendations(profile, gpu)
+    recommendations.extend([
+        "Run `python installer.py test-samples` after installing requirements to confirm image/clip writes.",
+        "Run `python installer.py repair` any time paths, nodes, models, or cache behavior looks wrong.",
+    ])
 
     return HardwareReport(
         gpu=gpu,
@@ -643,8 +747,8 @@ def build_hardware_report() -> HardwareReport:
         profile_reason=reason,
         warnings=warnings,
         recommendations=recommendations,
+        profile_settings=dict(PROFILE_SETTINGS[profile]),
     )
-
 
 # ---------------------------------------------------------------------------
 # Project setup and sample checks
@@ -804,6 +908,18 @@ def run_sample_tests() -> tuple[Path, Path, list[str]]:
     return image, clip, warnings
 
 
+def reset_cache() -> list[Path]:
+    """Safely clear known disposable cache/preview folders and recreate them."""
+
+    reset_paths: list[Path] = []
+    for target in CACHE_RESET_TARGETS:
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True, exist_ok=True)
+        reset_paths.append(target)
+    return reset_paths
+
+
 # ---------------------------------------------------------------------------
 # Rich UI rendering
 # ---------------------------------------------------------------------------
@@ -863,6 +979,13 @@ def render_hardware_report(report: HardwareReport) -> None:
     table.add_row("Reason", report.profile_reason)
     CONSOLE.print(table)
 
+    if report.profile_settings:
+        settings = Table(title="Selected profile defaults", box=box.SIMPLE_HEAVY)
+        settings.add_column("Setting", style="bold")
+        settings.add_column("Default")
+        for key, value in report.profile_settings.items():
+            settings.add_row(key.replace("_", " ").title(), value)
+        CONSOLE.print(settings)
     if report.recommendations:
         CONSOLE.print(Panel("\n".join(f"• {item}" for item in report.recommendations), title="Recommendations", border_style="green"))
     if report.warnings:
@@ -881,26 +1004,185 @@ def repair_suggestion_for_kind(kind: str) -> str:
     return suggestions.get(kind, "Check path and permissions.")
 
 
+def inspect_comfyui(path: Path) -> list[RepairSuggestion]:
+    """Inspect a detected ComfyUI install for common missing folders/nodes."""
+
+    suggestions: list[RepairSuggestion] = []
+    missing_dirs = [relative for relative in COMFYUI_EXPECTED_DIRS if not (path / relative).exists()]
+    if missing_dirs:
+        suggestions.append(RepairSuggestion(
+            area="ComfyUI",
+            severity="warning",
+            symptom=f"Missing expected folders: {', '.join(missing_dirs)}",
+            actions=[
+                "Open ComfyUI once so it can create its model/custom_nodes folders.",
+                "Fix COMFYUI_PATH if it points to a wrapper folder instead of the real ComfyUI checkout.",
+                "Create missing model folders manually if this is a portable install.",
+            ],
+            command="python installer.py detect --repair",
+        ))
+
+    custom_nodes = path / "custom_nodes"
+    if custom_nodes.exists():
+        installed_node_names = {child.name.lower() for child in custom_nodes.iterdir() if child.is_dir()}
+        missing_hints = [name for name in COMFYUI_NODE_HINTS if name.lower() not in installed_node_names]
+        if missing_hints:
+            suggestions.append(RepairSuggestion(
+                area="ComfyUI nodes",
+                severity="info",
+                symptom=f"Recommended nodes not detected: {', '.join(missing_hints)}",
+                actions=[
+                    "Use ComfyUI-Manager to reinstall missing or disabled video nodes.",
+                    "Restart ComfyUI after node installation and check its console for import errors.",
+                    "If a node fails, reinstall that node's requirements in the ComfyUI Python environment.",
+                ],
+                command="cd <COMFYUI_PATH> && python main.py",
+            ))
+    return suggestions
+
+
+def inspect_ostris(path: Path) -> list[RepairSuggestion]:
+    """Inspect a detected Ostris AI Toolkit checkout for common problems."""
+
+    suggestions: list[RepairSuggestion] = []
+    if not (path / "run.py").exists():
+        suggestions.append(RepairSuggestion(
+            area="Ostris",
+            severity="error",
+            symptom="run.py is missing from the detected Ostris path.",
+            actions=[
+                "Fix OSTRIS_PATH so it points to the ai-toolkit repository root.",
+                "Re-clone or repair the Ostris AI Toolkit checkout.",
+            ],
+        ))
+    if not ((path / "venv").exists() or (path / ".venv").exists()):
+        suggestions.append(RepairSuggestion(
+            area="Ostris environment",
+            severity="info",
+            symptom="No local venv/.venv was detected beside Ostris.",
+            actions=[
+                "This is okay for Pinokio installs, but manual installs should create a dedicated environment.",
+                "Install Ostris requirements in the same environment used for training jobs.",
+            ],
+            command="cd <OSTRIS_PATH> && python -m pip install -r requirements.txt",
+        ))
+    return suggestions
+
+
+def build_repair_suggestions(detections: dict[str, list[InstallCandidate]], report: HardwareReport) -> list[RepairSuggestion]:
+    """Build prioritized, specific recovery actions for installer output."""
+
+    suggestions: list[RepairSuggestion] = []
+    if not detections.get("ostris"):
+        suggestions.append(RepairSuggestion(
+            area="Ostris",
+            severity="warning",
+            symptom="Ostris AI Toolkit was not found.",
+            actions=[
+                "Install or locate Ostris AI Toolkit for LoRA training.",
+                "Set OSTRIS_PATH in .env to the ai-toolkit repository root.",
+                "If installed through Pinokio, set PINOKIO_HOME and rerun detection.",
+            ],
+        ))
+    else:
+        suggestions.extend(inspect_ostris(Path(detections["ostris"][0].path)))
+
+    if not detections.get("comfyui"):
+        suggestions.append(RepairSuggestion(
+            area="ComfyUI",
+            severity="warning",
+            symptom="ComfyUI was not found.",
+            actions=[
+                "Install ComfyUI or set COMFYUI_PATH in .env to the real ComfyUI checkout.",
+                "After installing, reinstall missing ComfyUI nodes with ComfyUI-Manager.",
+                "Verify model paths for checkpoints, LoRAs, VAEs, and video models.",
+            ],
+        ))
+    else:
+        suggestions.extend(inspect_comfyui(Path(detections["comfyui"][0].path)))
+
+    if not detections.get("pinokio"):
+        suggestions.append(RepairSuggestion(
+            area="Pinokio",
+            severity="info",
+            symptom="Pinokio was not found; this is optional.",
+            actions=[
+                "Install Pinokio only if you prefer managed AI app checkouts.",
+                "Manual ComfyUI/Ostris installs work as long as COMFYUI_PATH and OSTRIS_PATH are set.",
+            ],
+        ))
+
+    if not report.gpu.cuda_available:
+        suggestions.append(RepairSuggestion(
+            area="GPU/CUDA",
+            severity="warning",
+            symptom="No CUDA-capable NVIDIA GPU was detected.",
+            actions=[
+                "Install or update NVIDIA drivers, then verify `nvidia-smi` works.",
+                "Install the CUDA-enabled PyTorch wheel appropriate for your platform.",
+                "Configure RUNPOD_API_KEY if this machine will only run the UI locally.",
+            ],
+            command="nvidia-smi",
+        ))
+    elif report.recommended_profile == HardwareProfile.LOCAL_LOW_VRAM:
+        suggestions.append(RepairSuggestion(
+            area="Low VRAM profile",
+            severity="info",
+            symptom="The selected GPU should use conservative local generation settings.",
+            actions=[
+                "Use 720p, batch size 1, short clips, disk cache, and FP8/GGUF where possible.",
+                "Close other GPU applications before generation.",
+                "Use RunPod for long Wan jobs, high-resolution upscales, or repeated OOMs.",
+            ],
+        ))
+
+    if report.cache_free_gb < MIN_CACHE_FREE_GB:
+        suggestions.append(RepairSuggestion(
+            area="Cache/disk",
+            severity="warning",
+            symptom=f"Only {report.cache_free_gb} GB free in the cache filesystem.",
+            actions=[
+                "Move FUTA_VISION_CACHE_DIR to a larger SSD in .env.",
+                "Delete stale previews and temporary cache files with `python installer.py repair --reset-cache`.",
+                "Move completed outputs out of outputs/ before long jobs.",
+            ],
+            command="python installer.py repair --reset-cache",
+        ))
+
+    if not module_available("cv2"):
+        suggestions.append(RepairSuggestion(
+            area="Sample clip test",
+            severity="info",
+            symptom="opencv-python is not importable, so MP4 sample generation may fall back to a text placeholder.",
+            actions=["Install runtime dependencies from requirements.txt."],
+            command="python -m pip install -r requirements.txt",
+        ))
+    return suggestions
+
+
 def render_repair_suggestions(detections: dict[str, list[InstallCandidate]], report: HardwareReport) -> None:
     """Print actionable repair suggestions for common setup issues."""
 
-    lines: list[str] = []
-    for kind in ["ostris", "comfyui", "pinokio"]:
-        if not detections.get(kind):
-            lines.append(f"[bold]{kind}[/bold]: {repair_suggestion_for_kind(kind)}")
-    if not report.gpu.cuda_available:
-        lines.append("[bold]gpu[/bold]: Install/update NVIDIA drivers and CUDA-capable PyTorch, or configure RUNPOD_API_KEY for cloud mode.")
-    elif report.recommended_profile == HardwareProfile.LOCAL_LOW_VRAM:
-        lines.append("[bold]low VRAM[/bold]: Keep local_low_vram, use 720p, batch size 1, disk cache, and cloud fallback for OOM-heavy jobs.")
-    if report.cache_free_gb < MIN_CACHE_FREE_GB:
-        lines.append("[bold]disk cache[/bold]: Move FUTA_VISION_CACHE_DIR to a drive with more free space or clean old outputs/cache files.")
-    if not module_available("cv2"):
-        lines.append("[bold]sample clip[/bold]: Install requirements.txt so opencv-python can write the sample MP4.")
-
-    if lines:
-        CONSOLE.print(Panel("\n".join(f"• {line}" for line in lines), title="Repair suggestions", border_style="yellow"))
-    else:
+    suggestions = build_repair_suggestions(detections, report)
+    if not suggestions:
         CONSOLE.print(Panel("No immediate repair suggestions. Setup looks ready for the Gradio app.", border_style="green"))
+        return
+
+    table = Table(title="Repair suggestions", box=box.SIMPLE_HEAVY)
+    table.add_column("Area", style="bold")
+    table.add_column("Severity")
+    table.add_column("Problem")
+    table.add_column("Recovery actions")
+    table.add_column("Command")
+    for item in suggestions:
+        table.add_row(
+            item.area,
+            item.severity,
+            item.symptom,
+            "\n".join(f"• {action}" for action in item.actions),
+            item.command or "—",
+        )
+    CONSOLE.print(table)
 
 
 # ---------------------------------------------------------------------------
@@ -930,11 +1212,15 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
 
     existing_state = read_json(INSTALLER_STATE_PATH)
     non_interactive = args.non_interactive
+    total_steps = 6
 
+    render_step(1, total_steps, "Adult-use confirmation", "This app is for lawful, consenting adult workflows only.")
     if args.accept_adult:
         adult_confirmed = True
+        CONSOLE.print("[green]Adult confirmation supplied by command-line flag.[/green]")
     elif non_interactive:
         adult_confirmed = bool(existing_state.get("adult_confirmed", False))
+        CONSOLE.print("[green]Adult confirmation reused from previous installer state.[/green]" if adult_confirmed else "[yellow]Non-interactive mode requires --accept-adult on a fresh install.[/yellow]")
     else:
         adult_confirmed = Confirm.ask(
             "Confirm you are an adult and will use this local app only with lawful, consenting adult content?",
@@ -943,39 +1229,57 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
     if not adult_confirmed:
         raise InstallerError("Adult confirmation was not recorded. Re-run with --accept-adult only if appropriate.")
 
+    render_step(2, total_steps, "Privacy explanation", "Local-first by default; cloud offload is optional and credential-gated.")
     privacy_text = Text.from_markup(
-        "Futa-Vision is configured local-first. Optional RunPod/cloud mode can upload prompts, workflow manifests, "
-        "and selected assets only after you configure credentials and explicitly choose cloud/auto workflows."
+        "Futa-Vision keeps the UI, library, timelines, and settings on this machine by default. "
+        "If you enable RunPod/cloud mode later, workflow manifests, prompts, and selected assets may be uploaded "
+        "only for jobs you explicitly send to cloud/auto mode. Review your content and credentials before offloading."
     )
     CONSOLE.print(Panel(privacy_text, title="Privacy notice", border_style="magenta"))
     if args.privacy_ack:
         privacy_acknowledged = True
+        CONSOLE.print("[green]Privacy acknowledgement supplied by command-line flag.[/green]")
     elif non_interactive:
         privacy_acknowledged = bool(existing_state.get("privacy_acknowledged", False))
+        CONSOLE.print("[green]Privacy acknowledgement reused from previous installer state.[/green]" if privacy_acknowledged else "[yellow]Non-interactive mode requires --privacy-ack on a fresh install.[/yellow]")
     else:
         privacy_acknowledged = Confirm.ask("Acknowledge the privacy notice?", default=bool(existing_state.get("privacy_acknowledged", False)))
     if not privacy_acknowledged:
         raise InstallerError("Privacy notice was not acknowledged. Re-run after reviewing cloud/local behavior.")
 
+    render_step(3, total_steps, "Hardware summary", "Choose safe defaults before any expensive generation or training job.")
+    render_hardware_report(report)
     profile = choose_profile(report, non_interactive, args.profile)
+    CONSOLE.print(Panel(
+        "\n".join(f"• {key.replace('_', ' ').title()}: {value}" for key, value in PROFILE_SETTINGS[profile].items()),
+        title=f"Selected profile: {profile.value}",
+        border_style="green",
+    ))
 
+    render_step(4, total_steps, "Optional RunPod setup", "Skip this if you only want local mode for now.")
     runpod_key: str | None = None
     if args.runpod_key:
         runpod_key = args.runpod_key.strip()
+        CONSOLE.print("[green]RunPod API key provided by command-line flag; writing to .env.[/green]")
     elif not non_interactive:
         configure_runpod = Confirm.ask("Optionally configure a RunPod API key now?", default=False)
         if configure_runpod:
             runpod_key = Prompt.ask("RunPod API key", password=True).strip()
+    else:
+        CONSOLE.print("[blue]RunPod setup skipped in non-interactive mode.[/blue]")
 
-    ensure_env_defaults(detections, profile, runpod_key=runpod_key)
-    write_app_settings(profile, detections)
+    render_step(5, total_steps, "Write idempotent configuration", "Existing user values are preserved; missing defaults are filled in.")
+    run_with_status("Writing .env and app settings...", lambda: ensure_env_defaults(detections, profile, runpod_key=runpod_key))
+    run_with_status("Writing settings/futa_vision_settings.json...", lambda: write_app_settings(profile, detections))
 
+    render_step(6, total_steps, "Sample image and short clip test", "This verifies writable outputs and local media dependencies.")
     if args.skip_sample_tests:
         image_path = existing_state.get("sample_image_path")
         clip_path = existing_state.get("sample_clip_path")
         sample_warnings: list[str] = []
+        CONSOLE.print("[blue]Sample tests skipped by request.[/blue]")
     else:
-        image, clip, sample_warnings = run_sample_tests()
+        image, clip, sample_warnings = run_with_status("Creating sample image and short clip...", run_sample_tests)
         image_path = str(image)
         clip_path = str(clip)
         CONSOLE.print(Panel(f"Sample image: {image}\nSample clip: {clip}", title="Sample tests complete", border_style="green"))
@@ -999,8 +1303,16 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
         warnings=all_warnings,
     )
     write_json(INSTALLER_STATE_PATH, asdict(state))
+    CONSOLE.print(Panel(
+        "[bold green]Ready to launch.[/bold green]\n"
+        "Next steps:\n"
+        "1. Review any repair suggestions below.\n"
+        "2. Start the app with `python main.py`.\n"
+        "3. Open the Setup tab and confirm hardware/cloud status before generation.",
+        title="Wizard complete",
+        border_style="green",
+    ))
     return state
-
 
 def command_detect(args: argparse.Namespace) -> int:
     """Run detection only."""
@@ -1027,9 +1339,12 @@ def command_test_samples(args: argparse.Namespace) -> int:
 
 
 def command_repair(args: argparse.Namespace) -> int:
-    """Print repair suggestions."""
+    """Print repair suggestions and optionally reset disposable cache folders."""
 
     ensure_project_directories()
+    if getattr(args, "reset_cache", False):
+        reset_paths = reset_cache()
+        CONSOLE.print(Panel("\n".join(str(path) for path in reset_paths), title="Reset disposable cache folders", border_style="green"))
     detections = scan_for_installs()
     report = build_hardware_report()
     render_detection_table(detections)
@@ -1090,6 +1405,7 @@ def build_parser() -> argparse.ArgumentParser:
     samples.set_defaults(func=command_test_samples)
 
     repair = subparsers.add_parser("repair", help="Print setup repair suggestions.")
+    repair.add_argument("--reset-cache", action="store_true", help="Delete and recreate disposable cache/preview folders.")
     repair.set_defaults(func=command_repair)
 
     subparsers.add_parser("install", help="Run the full installer wizard.").set_defaults(func=command_install)
