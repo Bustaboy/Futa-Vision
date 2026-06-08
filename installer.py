@@ -52,6 +52,10 @@ APP_SETTINGS_PATH = SETTINGS_DIR / "futa_vision_settings.json"
 ENV_PATH = ROOT / ".env"
 ENV_EXAMPLE_PATH = ROOT / ".env.example"
 LOG_PATH = ROOT / "logs" / "installer.log"
+MAIN_APP_PATH = ROOT / "main.py"
+SAMPLE_IMAGE_PATH = ROOT / "outputs" / "images" / "installer_sample.png"
+SAMPLE_CLIP_PATH = ROOT / "outputs" / "clips" / "installer_sample.mp4"
+SAMPLE_CLIP_PLACEHOLDER_PATH = ROOT / "outputs" / "clips" / "installer_sample_clip_placeholder.txt"
 
 def _load_rich() -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
     """Load rich when available, otherwise provide tiny console fallbacks."""
@@ -275,6 +279,24 @@ class InstallerState:
     warnings: list[str]
 
 
+@dataclass(slots=True)
+class InstallStatus:
+    """Small status object intended for main.py startup integration."""
+
+    first_run: bool
+    repair_needed: bool
+    installed: bool
+    state_path: str
+    log_path: str
+    hardware_profile: str | None
+    adult_confirmed: bool
+    privacy_acknowledged: bool
+    runpod_configured: bool
+    missing_components: list[str]
+    warnings: list[str]
+    updated_at: str | None
+
+
 PROJECT_DIRECTORIES: list[Path] = [
     Path("library") / "male" / "backups",
     Path("library") / "partners",
@@ -354,6 +376,7 @@ COMFYUI_NODE_HINTS = [
 ]
 
 CACHE_RESET_TARGETS = [ROOT / "cache", ROOT / "outputs" / "timelines" / "previews"]
+REPAIR_ACTIONS = ("nodes", "model-paths", "cache", "hardware")
 
 
 class InstallerError(RuntimeError):
@@ -439,6 +462,75 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     LOGGER.info("Wrote JSON file: %s", path)
+
+
+def is_first_run(state_path: Path = INSTALLER_STATE_PATH) -> bool:
+    """Return True when main.py should route the user through setup first.
+
+    This intentionally checks only persisted installer state and required
+    acknowledgements so the app can call it quickly during startup without
+    scanning user drives or importing optional ML dependencies.
+    """
+
+    state = read_json(state_path)
+    first_run = not (
+        state.get("schema_version") == INSTALLER_SCHEMA_VERSION
+        and state.get("installed_at")
+        and state.get("adult_confirmed") is True
+        and state.get("privacy_acknowledged") is True
+    )
+    LOGGER.info("First-run status checked: %s", first_run)
+    return first_run
+
+
+def get_install_status(*, include_scan: bool = False) -> InstallStatus:
+    """Return install health for UI startup, setup screens, or diagnostics.
+
+    Args:
+        include_scan: When True, perform the heavier filesystem/hardware scan
+            used by Repair Mode. Keep this False for fast app startup checks.
+    """
+
+    state = read_json(INSTALLER_STATE_PATH)
+    first_run = is_first_run()
+    missing_components: list[str] = []
+    warnings = [str(item) for item in state.get("warnings", []) if item]
+
+    # Fast checks from saved state are suitable for main.py startup. The optional
+    # live scan is available for setup/repair screens where extra latency is OK.
+    if include_scan:
+        detections = scan_for_installs()
+        report = build_hardware_report()
+        required = ("futa_vision", "comfyui")
+        missing_components.extend(kind for kind in required if not detections.get(kind))
+        warnings.extend(suggestion.symptom for suggestion in build_repair_suggestions(detections, report) if suggestion.severity == "warning")
+    else:
+        detected = state.get("detected", {}) if isinstance(state.get("detected", {}), dict) else {}
+        missing_components.extend(kind for kind in ("futa_vision", "comfyui") if not detected.get(kind))
+
+    repair_needed = first_run or bool(missing_components or warnings)
+    return InstallStatus(
+        first_run=first_run,
+        repair_needed=repair_needed,
+        installed=not first_run,
+        state_path=str(INSTALLER_STATE_PATH),
+        log_path=str(LOG_PATH),
+        hardware_profile=state.get("hardware_profile") if isinstance(state.get("hardware_profile"), str) else None,
+        adult_confirmed=bool(state.get("adult_confirmed", False)),
+        privacy_acknowledged=bool(state.get("privacy_acknowledged", False)),
+        runpod_configured=bool(state.get("runpod_configured", False)),
+        missing_components=sorted(set(missing_components)),
+        warnings=sorted(set(warnings)),
+        updated_at=state.get("updated_at") if isinstance(state.get("updated_at"), str) else None,
+    )
+
+
+def needs_repair(*, include_scan: bool = False) -> bool:
+    """Return True when startup should offer Repair Mode."""
+
+    status = get_install_status(include_scan=include_scan)
+    LOGGER.info("Repair-needed status checked: %s", status.repair_needed)
+    return status.repair_needed
 
 
 def load_env_file(path: Path = ENV_PATH) -> dict[str, str]:
@@ -568,6 +660,7 @@ def env_path_candidates(env: dict[str, str]) -> dict[str, list[Path]]:
 def scan_for_installs() -> dict[str, list[InstallCandidate]]:
     """Detect existing Ostris, ComfyUI, Pinokio, and Futa-Vision installs."""
 
+    LOGGER.info("Scanning for local engine/app installs")
     env = load_env_file()
     explicit = env_path_candidates(env)
     results: dict[str, list[InstallCandidate]] = {
@@ -622,6 +715,7 @@ def scan_for_installs() -> dict[str, list[InstallCandidate]]:
                 if looks_like_futa_vision(child):
                     add_candidate(results["futa_vision"], InstallCandidate("futa_vision", str(child.resolve()), "medium", "filesystem scan", "Futa-Vision markers matched"))
 
+    LOGGER.info("Install scan complete: %s", {kind: len(paths) for kind, paths in results.items()})
     return results
 
 
@@ -882,7 +976,7 @@ def write_app_settings(profile: HardwareProfile, detections: dict[str, list[Inst
 def create_sample_image() -> Path:
     """Create a lightweight sample PNG that verifies output/image permissions."""
 
-    output = ROOT / "outputs" / "images" / "installer_sample.png"
+    output = SAMPLE_IMAGE_PATH
     if module_available("PIL"):
         image_module = importlib.import_module("PIL.Image")
         draw_module = importlib.import_module("PIL.ImageDraw")
@@ -901,7 +995,7 @@ def create_sample_image() -> Path:
 def create_sample_clip() -> Path:
     """Create a short MP4 clip that verifies output/clip permissions and codecs."""
 
-    output = ROOT / "outputs" / "clips" / "installer_sample.mp4"
+    output = SAMPLE_CLIP_PATH
     if module_available("cv2") and module_available("numpy"):
         cv2 = importlib.import_module("cv2")
         np = importlib.import_module("numpy")
@@ -919,7 +1013,7 @@ def create_sample_clip() -> Path:
             return output
         writer.release()
 
-    fallback = ROOT / "outputs" / "clips" / "installer_sample_clip_placeholder.txt"
+    fallback = SAMPLE_CLIP_PLACEHOLDER_PATH
     fallback.write_text(
         "OpenCV video writer was unavailable, so the installer wrote this placeholder instead.\n"
         "Install opencv-python from requirements.txt and rerun `python installer.py test-samples`.\n",
@@ -947,6 +1041,8 @@ def reset_cache() -> list[Path]:
         if target.exists():
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
+        if target == ROOT / "cache":
+            (target / ".gitkeep").touch()
         reset_paths.append(target)
     LOGGER.info("Reset disposable cache folders: %s", [str(path) for path in reset_paths])
     return reset_paths
@@ -986,6 +1082,94 @@ def render_comfyui_node_reinstall_help(detections: dict[str, list[InstallCandida
     LOGGER.info("Displayed ComfyUI node reinstall guidance")
 
 
+def select_repair_actions(args: argparse.Namespace) -> set[str]:
+    """Resolve Repair Mode actions from flags or an interactive menu.
+
+    Repair Mode is deliberately conservative: it can safely recreate missing
+    folders and clear known disposable caches, while node reinstall remains
+    guided because ComfyUI environments are often GPU- and Python-specific.
+    """
+
+    selected: set[str] = set(getattr(args, "repair_action", []) or [])
+    if getattr(args, "all", False):
+        selected.update(REPAIR_ACTIONS)
+    if getattr(args, "reset_cache", False):
+        selected.add("cache")
+    if getattr(args, "fix_model_paths", False):
+        selected.add("model-paths")
+    if getattr(args, "reinstall_node_help", False):
+        selected.add("nodes")
+    if getattr(args, "rerun_hardware_check", False):
+        selected.add("hardware")
+
+    if selected or getattr(args, "non_interactive", False):
+        LOGGER.info("Repair actions selected from command line: %s", sorted(selected))
+        return selected
+
+    CONSOLE.print(Panel(
+        "Choose safe maintenance actions to run now. Press Enter for the recommended full repair pass.",
+        title="Repair Mode",
+        border_style="cyan",
+    ))
+    CONSOLE.print("1. Reinstall missing ComfyUI nodes (guided instructions)")
+    CONSOLE.print("2. Fix common ComfyUI model paths")
+    CONSOLE.print("3. Clear cache and preview folders")
+    CONSOLE.print("4. Re-run hardware check")
+    CONSOLE.print("5. Run all recommended actions")
+    choice = Prompt.ask("Repair action", choices=["1", "2", "3", "4", "5"], default="5")
+    mapping = {
+        "1": {"nodes"},
+        "2": {"model-paths"},
+        "3": {"cache"},
+        "4": {"hardware"},
+        "5": set(REPAIR_ACTIONS),
+    }
+    selected = mapping[choice]
+    LOGGER.info("Repair actions selected from menu: %s", sorted(selected))
+    return selected
+
+
+def run_repair_actions(actions: set[str], detections: dict[str, list[InstallCandidate]]) -> HardwareReport:
+    """Run selected safe Repair Mode actions and return the latest hardware report."""
+
+    LOGGER.info("Running Repair Mode actions: %s", sorted(actions))
+    report = build_hardware_report()
+
+    if "nodes" in actions:
+        render_comfyui_node_reinstall_help(detections)
+
+    if "model-paths" in actions:
+        try:
+            repaired_paths = create_missing_comfyui_model_paths(detections)
+        except InstallerError as exc:
+            LOGGER.warning("Skipped ComfyUI model path repair: %s", exc)
+            CONSOLE.print(Panel(str(exc), title="Model path repair skipped", border_style="yellow"))
+        else:
+            CONSOLE.print(Panel(
+                "\n".join(str(path) for path in repaired_paths),
+                title="Fixed/verified ComfyUI model paths",
+                border_style="green",
+            ))
+
+    if "cache" in actions:
+        reset_paths = reset_cache()
+        CONSOLE.print(Panel(
+            "\n".join(str(path) for path in reset_paths),
+            title="Clear cache complete",
+            border_style="green",
+        ))
+
+    if "hardware" in actions:
+        report = build_hardware_report()
+        CONSOLE.print(Panel(
+            "Hardware check completed. Review the refreshed report below for CUDA, VRAM, and cache guidance.",
+            title="Hardware check",
+            border_style="green",
+        ))
+
+    return report
+
+
 def maybe_launch_app(args: argparse.Namespace) -> None:
     """Offer to launch the Gradio app after a successful install."""
 
@@ -997,13 +1181,12 @@ def maybe_launch_app(args: argparse.Namespace) -> None:
         LOGGER.info("Launch skipped")
         return
 
-    main_path = ROOT / "main.py"
-    if not main_path.exists():
-        raise InstallerError(f"Cannot launch because `{main_path}` was not found. Run the installer from the Futa-Vision repo root.")
+    if not MAIN_APP_PATH.exists():
+        raise InstallerError(f"Cannot launch because `{MAIN_APP_PATH}` was not found. Run the installer from the Futa-Vision repo root.")
     CONSOLE.print(Panel("[bold green]Installation successful! Launching Futa-Vision...[/bold green]\nOpen the local Gradio URL printed by main.py.", border_style="green"))
-    LOGGER.info("Launching Futa-Vision via %s", main_path)
+    LOGGER.info("Launching Futa-Vision via %s", MAIN_APP_PATH)
     try:
-        subprocess.Popen([sys.executable, str(main_path)], cwd=ROOT)
+        subprocess.Popen([sys.executable, str(MAIN_APP_PATH)], cwd=ROOT)
     except OSError as exc:
         LOGGER.exception("Failed to launch Futa-Vision")
         raise InstallerError(f"Installation completed, but Futa-Vision could not be launched automatically: {exc}. Try `python main.py` manually.") from exc
@@ -1431,20 +1614,20 @@ def command_test_samples(args: argparse.Namespace) -> int:
 def command_repair(args: argparse.Namespace) -> int:
     """Print repair suggestions and optionally perform safe repair actions."""
 
+    LOGGER.info("Starting Repair Mode")
     ensure_project_directories()
     detections = scan_for_installs()
-    if getattr(args, "reset_cache", False):
-        reset_paths = reset_cache()
-        CONSOLE.print(Panel("\n".join(str(path) for path in reset_paths), title="Clear cache complete", border_style="green"))
-    if getattr(args, "fix_model_paths", False):
-        repaired_paths = create_missing_comfyui_model_paths(detections)
-        CONSOLE.print(Panel("\n".join(str(path) for path in repaired_paths), title="Fixed/verified ComfyUI model paths", border_style="green"))
-    if getattr(args, "reinstall_node_help", False):
-        render_comfyui_node_reinstall_help(detections)
-    report = build_hardware_report()
+    actions = select_repair_actions(args)
+    report = run_repair_actions(actions, detections)
     render_detection_table(detections)
     render_hardware_report(report)
     render_repair_suggestions(detections, report)
+    status = get_install_status(include_scan=False)
+    CONSOLE.print(Panel(
+        "Repair Mode complete. If warnings remain, follow the suggestions above, then launch with `python main.py`.",
+        title="Repair complete" if not status.first_run else "Repair complete — setup still needed",
+        border_style="green" if not status.first_run else "yellow",
+    ))
     return 0
 
 
@@ -1468,13 +1651,17 @@ def command_install(args: argparse.Namespace) -> int:
 
     CONSOLE.print(Panel(
         "\n".join([
-            "Installation successful!",
+            "Installation successful! You can now launch Futa-Vision.",
+            "You're ready to start organizing assets, checking hardware status, and preparing your first workflow.",
             f"Installer state: {INSTALLER_STATE_PATH}",
             f"App settings: {APP_SETTINGS_PATH}",
             f"Environment file: {ENV_PATH}",
             f"Installer log: {LOG_PATH}",
             f"Hardware profile: {state.hardware_profile}",
-            "Launch with: python main.py",
+            "Next steps:",
+            "1. Launch with: python main.py",
+            "2. Open the Setup tab and verify ComfyUI/Ostris paths.",
+            "3. If anything looks off, run: python installer.py repair --all",
         ]),
         title="Setup complete",
         border_style="green",
@@ -1496,6 +1683,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runpod-key", help="Optional RunPod API key to write to .env.")
     parser.add_argument("--skip-sample-tests", action="store_true", help="Skip sample image and short clip tests.")
     parser.add_argument("--launch", action="store_true", help="Launch main.py automatically after a successful install.")
+    parser.add_argument("--repair-mode", action="store_true", help="Open Repair Mode without typing the repair subcommand.")
 
     detect = subparsers.add_parser("detect", help="Detect engines and hardware without writing wizard state.")
     detect.add_argument("--repair", action="store_true", help="Also print repair suggestions.")
@@ -1508,6 +1696,14 @@ def build_parser() -> argparse.ArgumentParser:
     repair.add_argument("--reset-cache", action="store_true", help="Clear disposable cache/preview folders and recreate them.")
     repair.add_argument("--fix-model-paths", action="store_true", help="Create missing ComfyUI model/custom_nodes folders when COMFYUI_PATH is detected.")
     repair.add_argument("--reinstall-node-help", action="store_true", help="Show step-by-step ComfyUI node reinstall guidance.")
+    repair.add_argument("--rerun-hardware-check", action="store_true", help="Re-run and display the hardware/CUDA/cache check.")
+    repair.add_argument("--all", action="store_true", help="Run every safe Repair Mode action.")
+    repair.add_argument(
+        "--repair-action",
+        action="append",
+        choices=REPAIR_ACTIONS,
+        help="Run one Repair Mode action; repeat for multiple actions.",
+    )
     repair.set_defaults(func=command_repair)
 
     subparsers.add_parser("install", help="Run the full installer wizard.").set_defaults(func=command_install)
@@ -1522,6 +1718,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "repair_mode", False):
+        args.func = command_repair
     LOGGER.info("Installer command started: %s", args)
     try:
         result = int(args.func(args))
