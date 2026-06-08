@@ -122,4 +122,41 @@ Full regression command:
 python -m pytest -q
 ```
 
-Next implementation target: Phase 4 will connect the recorded regeneration sidecars to RunPod/cloud execution, return remote clips into the exact local timeline slot, render timing transforms during final export, and polish cloud/local/hybrid status UX.
+## Phase 4.1 Complete
+
+Phase 4.1 adds local-first RunPod cloud offloading and hybrid mode while preserving the Phase 2/3 JSON sidecar contract. The UI, scoring, and timeline remain local; Cloud/Auto only packages the reviewed workflow manifest and listed assets for remote execution when RunPod credentials and an upload worker are configured.
+
+Basic usage:
+
+1. Add optional RunPod settings to `.env`:
+   - `RUNPOD_API_KEY` for pod launch/status/disconnect.
+   - `RUNPOD_POD_ID` or `RUNPOD_TEMPLATE_ID` if you already have a preferred pod/template.
+   - `FUTA_VISION_RUNPOD_UPLOAD_URL` only when a remote worker is ready to consume `workflow_manifest.json`.
+2. Launch the app:
+
+   ```bash
+   python main.py
+   ```
+
+3. Open **Setup → Phase 4.1 Cloud / Hybrid Mode**. Use the color-coded badge to verify whether the selector is in **Local**, **Cloud ready**, or **local fallback** state.
+4. Use **One-click Launch RunPod Pod**, then **Refresh Cloud Status**. If RunPod is still booting or networking is delayed, wait 30–60 seconds and retry refresh before falling back locally.
+5. In **Generate Video**, choose **Local / Cloud / Auto**:
+   - **Local:** no cloud upload is attempted.
+   - **Cloud:** uses RunPod when available, otherwise falls back locally.
+   - **Auto:** keeps RTX 4070 8 GB-friendly 720p local defaults, but offloads unavailable-CUDA, OOM-like, Wan/long-duration, or heavy jobs when cloud is available.
+6. If a remote upload worker URL is configured, review the manifest/privacy notice and enable the upload confirmation checkbox before generation.
+7. Returned cloud outputs are downloaded/copied into `outputs/cloud_results`, given/validated JSON sidecars, and imported back into the local timeline.
+
+Phase 4.1 test command:
+
+```bash
+python -m pytest -q tests/test_cloud_manager_phase41.py
+```
+
+Full regression command:
+
+```bash
+python -m pytest -q
+```
+
+Phase 4.2 will polish final export/upscale UX, add cost estimates and remote cache controls, and replace exact timeline slots with returned cloud outputs.

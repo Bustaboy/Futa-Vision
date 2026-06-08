@@ -21,6 +21,7 @@ import gradio as gr
 from dotenv import load_dotenv
 
 import chat_parser
+import cloud_manager
 import hardware_check
 import library as character_library
 import regeneration_engine
@@ -294,15 +295,18 @@ def build_generation_plan(
     selected_partners: str,
     pipeline: str,
     duration_seconds: int,
-    use_runpod: bool,
+    cloud_mode: str,
 ) -> str:
     """Create a hardware-aware Phase 2 preview plan without launching generation."""
 
     settings = hardware_check.get_low_vram_settings()
-    mode = "RunPod cloud offload" if use_runpod else settings["mode"]
+    cloud_decision = cloud_manager.decide_execution_mode(cloud_mode if cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto", "generation")
+    mode = cloud_decision["execution"]
     normalized_pipeline = "wan" if pipeline.lower().startswith("wan") else "ltx"
     plan = {
         "mode": mode,
+        "cloud_mode": cloud_mode,
+        "cloud_decision": cloud_decision,
         "resolution": f"{settings.get('resolution', '1280x720')} local default; final upscale with SeedVR 2.5 / RTX Video SR / Nomos2 after assembly",
         "clip_duration_seconds": min(max(duration_seconds, 5), 10),
         "target_pipeline": normalized_pipeline,
@@ -329,21 +333,49 @@ def run_video_generation_pipeline(
     pipeline: str,
     duration_seconds: int,
     target_duration: int,
-    use_runpod: bool,
+    cloud_mode: str,
+    cloud_upload_confirmed: bool,
+    timeline_state_json: str | None = None,
     progress: gr.Progress = gr.Progress(track_tqdm=True),
-) -> tuple[str, str, str | None]:
-    """Launch the Phase 2 video assembly orchestrator from Gradio."""
+) -> tuple[str, str, str | None, str | None]:
+    """Launch the Phase 4.1 hybrid video pipeline from Gradio."""
 
-    return video_assembly.gradio_build_video_pipeline(
-        scene_prompt=scene_prompt,
-        selected_character_ids=selected_character_ids,
-        scene_type=scene_type,
-        pipeline=pipeline,
-        duration_seconds=duration_seconds,
-        target_duration=target_duration,
-        use_runpod=use_runpod,
-        progress=progress,
-    )
+    scene_config = {
+        "scene_prompt": scene_prompt,
+        "selected_character_ids": selected_character_ids,
+        "scene_type": scene_type,
+        "pipeline": pipeline,
+        "duration_seconds": duration_seconds,
+        "target_duration": target_duration,
+    }
+    try:
+        local_result, cloud_result, decision = cloud_manager.offload_or_run_local_video_pipeline(
+            scene_config=scene_config,
+            cloud_mode=cloud_mode if cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto",
+            timeline_state_json=timeline_state_json,
+            progress=progress,
+            cloud_upload_confirmed=cloud_upload_confirmed,
+        )
+    except Exception as exc:  # noqa: BLE001 - UI boundary returns friendly errors.
+        error_payload = {"status": "error", "error": str(exc), "scene_config": scene_config, "cloud_mode": cloud_mode}
+        return f"## ❌ Phase 4.1 hybrid pipeline failed\n{exc}", json.dumps(error_payload, indent=2), None, timeline_state_json
+
+    if cloud_result is not None:
+        payload = cloud_result.to_dict()
+        summary = (
+            "## Phase 4.1 cloud round trip `complete`\n"
+            f"- Job id: `{cloud_result.job_id}`\n"
+            f"- Execution: `{decision.get('execution')}` — {decision.get('reason')}\n"
+            f"- Local result: `{cloud_result.local_result_path}`\n"
+            f"- Timeline import: {cloud_result.timeline_status or 'n/a'}"
+        )
+        return summary, json.dumps(payload | {"decision": decision}, indent=2), cloud_result.local_result_path, cloud_result.timeline_state_json
+
+    assert local_result is not None
+    payload = asdict(local_result)
+    final_payload = (payload.get("final_video") or {}).get("payload") or {}
+    final_path = final_payload.get("final_video_path")
+    return video_assembly.result_to_markdown(local_result), json.dumps(payload | {"decision": decision}, indent=2), final_path, timeline_state_json
 
 
 async def parse_timeline_chat_edit(chat_message: str, timeline_state_json: str, timeline_notes: str) -> tuple[str, str]:
@@ -448,6 +480,71 @@ def start_general_physics_training(
     )
 
 
+def cloud_status_badge(cloud_mode: str) -> str:
+    """Return a compact color-coded cloud mode badge for prominent UI status."""
+
+    selected = cloud_mode if cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto"
+    status = cloud_manager.cloud_availability()
+    if selected == "Local":
+        label = "LOCAL ONLY"
+        color = "#166534"
+        background = "#dcfce7"
+    elif status.available:
+        label = f"{selected.upper()} READY"
+        color = "#1d4ed8"
+        background = "#dbeafe"
+    else:
+        label = f"{selected.upper()} → LOCAL FALLBACK"
+        color = "#92400e"
+        background = "#fef3c7"
+    return (
+        f"<div style='display:inline-block;padding:0.35rem 0.75rem;border-radius:999px;"
+        f"font-weight:700;color:{color};background:{background};border:1px solid {color}33;'>"
+        f"☁️ {label}</div>"
+    )
+
+
+def cloud_status_for_mode(cloud_mode: str) -> str:
+    """Render Phase 4.1 cloud selector status for Setup and Generate tabs."""
+
+    selected = cloud_mode if cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto"
+    return cloud_status_badge(selected) + "\n\n" + cloud_manager.cloud_status_markdown(selected)
+
+
+def launch_runpod_pod() -> str:
+    """Launch a RunPod pod, returning a friendly Markdown status."""
+
+    try:
+        status = cloud_manager.RunPodClient().launch_pod()
+    except Exception as exc:  # noqa: BLE001 - keep UI graceful when credentials/network are unavailable.
+        return f"## ⚠️ RunPod launch unavailable\n{exc}\n\nLocal and Auto fallback modes remain available."
+    return "## RunPod launch requested\n```json\n" + json.dumps(status.to_dict(), indent=2) + "\n```"
+
+
+def refresh_runpod_status() -> str:
+    """Return current RunPod availability/status without breaking local mode."""
+
+    try:
+        config = cloud_manager.load_runpod_config()
+        if config.pod_id and config.api_key_present:
+            status = cloud_manager.RunPodClient(config).status()
+        else:
+            status = cloud_manager.cloud_availability(config)
+    except Exception as exc:  # noqa: BLE001 - UI should never crash if RunPod is unreachable.
+        return f"## ⚠️ RunPod status unavailable\n{exc}\n\nCloud jobs will fall back locally."
+    return "## RunPod Status\n```json\n" + json.dumps(status.to_dict(), indent=2) + "\n```"
+
+
+def disconnect_runpod_pod() -> str:
+    """Stop/terminate the configured RunPod pod for cost control."""
+
+    try:
+        status = cloud_manager.RunPodClient().disconnect(terminate=True)
+    except Exception as exc:  # noqa: BLE001 - present actionable UI status.
+        return f"## ⚠️ RunPod disconnect unavailable\n{exc}"
+    return "## RunPod disconnect requested\n```json\n" + json.dumps(status.to_dict(), indent=2) + "\n```"
+
+
 def phase0_test_markdown() -> str:
     """Return README-equivalent quick test instructions inside the app."""
 
@@ -503,6 +600,20 @@ def build_ui() -> gr.Blocks:
                 refresh_hardware = gr.Button("Refresh Hardware Status", variant="primary")
                 refresh_hardware.click(hardware_status_markdown, outputs=hardware_output)
                 demo.load(hardware_status_markdown, outputs=hardware_output)
+
+                gr.Markdown("## Phase 4.1 Cloud / Hybrid Mode")
+                setup_cloud_mode = gr.Radio(hardware_check.CLOUD_MODE_OPTIONS, value=hardware_check.DEFAULT_CLOUD_MODE, label="Cloud mode selector")
+                cloud_status_output = gr.Markdown()
+                with gr.Row():
+                    refresh_cloud_status = gr.Button("Refresh Cloud Status", variant="secondary")
+                    launch_cloud_pod = gr.Button("One-click Launch RunPod Pod", variant="primary")
+                    disconnect_cloud_pod = gr.Button("Disconnect / Terminate RunPod Pod", variant="stop")
+                setup_cloud_mode.change(cloud_status_for_mode, inputs=setup_cloud_mode, outputs=cloud_status_output)
+                refresh_cloud_status.click(refresh_runpod_status, outputs=cloud_status_output)
+                launch_cloud_pod.click(launch_runpod_pod, outputs=cloud_status_output)
+                disconnect_cloud_pod.click(disconnect_runpod_pod, outputs=cloud_status_output)
+                demo.load(lambda: cloud_status_for_mode(hardware_check.DEFAULT_CLOUD_MODE), outputs=cloud_status_output)
+
                 training_defaults_output = gr.Markdown()
                 refresh_training_defaults = gr.Button("Refresh Phase 0.5 training defaults", variant="secondary")
                 refresh_training_defaults.click(training_defaults_markdown, outputs=training_defaults_output)
@@ -617,19 +728,20 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     duration = gr.Slider(5, 10, value=8, step=1, label="Short clip duration seconds")
                     target_duration = gr.Slider(10, 60, value=20, step=1, label="Smart-loop target seconds")
-                use_runpod = gr.Checkbox(label="Allow RunPod cloud fallback/offload for OOM", value=False)
+                cloud_mode = gr.Radio(hardware_check.CLOUD_MODE_OPTIONS, value=hardware_check.DEFAULT_CLOUD_MODE, label="Cloud mode (Local / Cloud / Auto)")
+                cloud_upload_confirmed = gr.Checkbox(
+                    label="I reviewed the cloud manifest/privacy notice and approve uploading listed workflow assets when a remote worker URL is configured.",
+                    value=False,
+                )
+                generation_cloud_status = gr.Markdown(cloud_status_for_mode(hardware_check.DEFAULT_CLOUD_MODE))
+                cloud_mode.change(cloud_status_for_mode, inputs=cloud_mode, outputs=generation_cloud_status)
                 with gr.Row():
                     generate_plan = gr.Button("Build generation plan", variant="secondary", interactive=initial_interactive)
                     generate_video = gr.Button("Generate Video", variant="primary", interactive=initial_interactive)
                 plan_output = gr.Markdown()
                 pipeline_json = gr.Code(label="Pipeline result / manifest", language="json")
                 final_video_file = gr.File(label="Final upscaled video placeholder")
-                generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, use_runpod], outputs=plan_output)
-                generate_video.click(
-                    run_video_generation_pipeline,
-                    inputs=[scene_prompt, selected_partners, scene_type, pipeline, duration, target_duration, use_runpod],
-                    outputs=[plan_output, pipeline_json, final_video_file],
-                )
+                generate_plan.click(build_generation_plan, inputs=[scene_prompt, selected_partners, pipeline, duration, cloud_mode], outputs=plan_output)
 
             with gr.Tab("🎬 Timeline & Edit", id="Timeline & Edit", visible=initial_interactive) as timeline_tab:
                 gr.Markdown(
@@ -638,6 +750,11 @@ def build_ui() -> gr.Blocks:
                     "The adult confirmation gate controls this entire tab."
                 )
                 timeline_components = timeline.build_timeline_editor(initial_interactive=initial_interactive)
+                generate_video.click(
+                    run_video_generation_pipeline,
+                    inputs=[scene_prompt, selected_partners, scene_type, pipeline, duration, target_duration, cloud_mode, cloud_upload_confirmed, timeline_components["state_json"]],
+                    outputs=[plan_output, pipeline_json, final_video_file, timeline_components["state_json"]],
+                )
                 gr.Markdown(
                     "## Phase 3.2 Parser + Phase 3.3 Targeted Regeneration\n"
                     "Enter natural-language edit requests to preview a structured intent, then apply targeted regeneration. "

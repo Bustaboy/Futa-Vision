@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,9 @@ DEFAULT_STRATEGY = (
 )
 DEFAULT_RESOLUTION = "1280x720 (720p)"
 DEFAULT_UPSCALERS = ["SeedVR 2.5", "RTX Video SR", "Nomos2"]
+CLOUD_MODE_OPTIONS = ["Local", "Cloud", "Auto"]
+DEFAULT_CLOUD_MODE = "Auto"
+
 
 
 @dataclass(slots=True)
@@ -55,6 +58,8 @@ class HardwareReport:
     minimum_recommended_cache_gb: float
     recommendations: list[str]
     warnings: list[str]
+    cloud_mode_options: list[str] = field(default_factory=lambda: list(CLOUD_MODE_OPTIONS))
+    default_cloud_mode: str = DEFAULT_CLOUD_MODE
 
 
 def _round_gb(value: float | None) -> float | None:
@@ -252,6 +257,8 @@ def collect_hardware_report(cache_path: str | Path = "cache") -> HardwareReport:
         default_strategy=DEFAULT_STRATEGY,
         default_resolution=DEFAULT_RESOLUTION,
         default_upscalers=DEFAULT_UPSCALERS,
+        cloud_mode_options=CLOUD_MODE_OPTIONS,
+        default_cloud_mode=DEFAULT_CLOUD_MODE,
         low_vram_threshold_gb=LOW_VRAM_THRESHOLD_GB,
         minimum_recommended_cache_gb=MIN_RECOMMENDED_CACHE_GB,
         recommendations=recommendations,
@@ -294,6 +301,8 @@ def get_low_vram_settings() -> dict[str, Any]:
         "resolution": DEFAULT_RESOLUTION,
         "device": "cuda" if report.gpu.cuda_available else "cpu_or_runpod",
         "runpod_recommended": report.recommended_mode == "cloud_recommended",
+        "cloud_mode_options": CLOUD_MODE_OPTIONS,
+        "default_cloud_mode": choose_default_cloud_mode(report),
         "estimated_minutes_per_epoch": 6 if low_vram else 3,
         "hardware_summary": {
             "gpu": report.gpu.name,
@@ -302,6 +311,58 @@ def get_low_vram_settings() -> dict[str, Any]:
             "cache_free_gb": report.cache_free_gb,
         },
         "warnings": report.warnings,
+    }
+
+
+def choose_default_cloud_mode(report: HardwareReport | None = None) -> str:
+    """Return the safest UI default for the Local / Cloud / Auto selector.
+
+    The app remains local-first, but Auto is exposed so RTX 4070-class systems
+    can keep 720p low-VRAM defaults while still preserving a cloud fallback path
+    for OOM, extension, training, and final-upscale jobs.
+    """
+
+    active_report = report or collect_hardware_report()
+    if not active_report.gpu.cuda_available:
+        return "Auto"
+    return DEFAULT_CLOUD_MODE
+
+
+def cloud_mode_status(report: HardwareReport | None = None, selected_mode: str = DEFAULT_CLOUD_MODE) -> dict[str, Any]:
+    """Summarize hardware-driven cloud/hybrid behavior for UI and tests."""
+
+    active_report = report or collect_hardware_report()
+    normalized = selected_mode if selected_mode in CLOUD_MODE_OPTIONS else DEFAULT_CLOUD_MODE
+    cuda_available = active_report.gpu.cuda_available
+    low_vram = (
+        active_report.gpu.total_vram_gb is not None
+        and active_report.gpu.total_vram_gb <= LOW_VRAM_THRESHOLD_GB
+    )
+
+    if normalized == "Local":
+        execution = "local_only"
+        reason = "Local mode selected; no cloud uploads will be attempted."
+    elif normalized == "Cloud":
+        execution = "cloud_requested"
+        reason = "Cloud mode selected; RunPod availability decides whether jobs offload or fall back locally."
+    elif not cuda_available:
+        execution = "auto_cloud_preferred"
+        reason = "Auto mode prefers RunPod because CUDA is unavailable."
+    elif low_vram:
+        execution = "auto_local_low_vram_with_cloud_fallback"
+        reason = "Auto mode uses RTX 4070-compatible 720p low-VRAM defaults and keeps RunPod as fallback for heavy/OOM jobs."
+    else:
+        execution = "auto_local_balanced"
+        reason = "Auto mode uses local balanced settings with optional RunPod fallback for long jobs."
+
+    return {
+        "selected_mode": normalized,
+        "execution": execution,
+        "reason": reason,
+        "hardware_mode": active_report.recommended_mode,
+        "cuda_available": cuda_available,
+        "total_vram_gb": active_report.gpu.total_vram_gb,
+        "cloud_mode_options": CLOUD_MODE_OPTIONS,
     }
 
 
@@ -316,6 +377,7 @@ def report_to_markdown(report: HardwareReport) -> str:
         f"**Default strategy:** {report.default_strategy}.",
         f"**Default local resolution:** {report.default_resolution}.",
         f"**Final upscale options:** {', '.join(report.default_upscalers)}.",
+        f"**Cloud selector default:** `{choose_default_cloud_mode(report)}` (options: {', '.join(report.cloud_mode_options)}).",
         "",
         "### GPU / CUDA",
         f"- **GPU:** {gpu.name}",
