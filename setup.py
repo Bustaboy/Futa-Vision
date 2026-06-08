@@ -23,6 +23,65 @@ except ImportError:  # Allows `python setup.py detect` in minimal bootstrap envi
 
 PROJECT_NAME = "futa-vision"
 ROOT = Path(__file__).resolve().parent
+MIN_PYTHON = (3, 12)
+MAX_PYTHON_EXCLUSIVE = (3, 14)
+PY_MODULES = [
+    "chat_parser",
+    "cloud_manager",
+    "exporter",
+    "hardware_check",
+    "installer",
+    "library",
+    "main",
+    "regeneration_engine",
+    "scoring",
+    "timeline",
+    "training_orchestrator",
+    "video_assembly",
+]
+
+
+def _format_version(version: tuple[int, int]) -> str:
+    """Format a major/minor Python version tuple for user-facing setup messages."""
+
+    return ".".join(str(part) for part in version)
+
+
+def is_supported_python(version_info: tuple[int, int] | None = None) -> bool:
+    """Return whether the interpreter matches the pinned runtime support window."""
+
+    current = version_info or sys.version_info[:2]
+    return MIN_PYTHON <= current < MAX_PYTHON_EXCLUSIVE
+
+
+def supported_python_message() -> str:
+    """Describe the supported Python window and the active interpreter."""
+
+    return (
+        f"Futa-Vision requires Python {_format_version(MIN_PYTHON)} through "
+        f"{MAX_PYTHON_EXCLUSIVE[0]}.{MAX_PYTHON_EXCLUSIVE[1] - 1}; "
+        f"current interpreter is {platform.python_version()}."
+    )
+
+
+def ensure_supported_python() -> None:
+    """Fail fast before dependency installation on unsupported Python versions."""
+
+    if not is_supported_python():
+        raise SystemExit(supported_python_message())
+
+
+def read_requirements() -> list[str]:
+    """Read pinned install requirements while ignoring comments and blank lines."""
+
+    requirements = ROOT / "requirements.txt"
+    dependencies: list[str] = []
+    for raw_line in requirements.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line and not line.startswith("#"):
+            dependencies.append(line)
+    return dependencies
+
 
 PINOKIO_APP_MARKERS = {
     "ostris": ["ai-toolkit", "aitoolkit", "ostris-ai-toolkit"],
@@ -195,6 +254,7 @@ if setup is not None:
 def run_detection() -> None:
     """Run setup detection independently of setuptools availability."""
 
+    ensure_supported_python()
     ensure_project_directories()
     ostris = find_install("ostris")
     comfyui = find_install("comfyui")
@@ -209,30 +269,26 @@ def run_detection() -> None:
 def install_runtime() -> None:
     """Install pinned requirements independently of setuptools command support."""
 
+    ensure_supported_python()
     requirements = ROOT / "requirements.txt"
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(requirements)])
     print("Next step: run `python setup.py detect` to confirm local engines and folder layout.")
 
 
-if __name__ == "__main__" and setup is None:
-    if len(sys.argv) >= 2 and sys.argv[1] == "detect":
-        run_detection()
-    elif len(sys.argv) >= 2 and sys.argv[1] == "install_runtime":
-        install_runtime()
-    else:
-        raise SystemExit(
-            "setuptools is not installed. Supported bootstrap commands without setuptools: "
-            "`python setup.py detect` or `python setup.py install_runtime`."
-        )
-elif setup is not None:
+def run_setuptools_setup() -> None:
+    """Invoke setuptools with project metadata and pinned runtime dependencies."""
+
+    if setup is None:
+        raise SystemExit("setuptools is required for package metadata commands.")
+
     setup(
         name=PROJECT_NAME,
         version="0.1.0",
         description="Local-first Gradio skeleton for the Futa-Vision AI video director workflow.",
-        python_requires=">=3.12",
-        py_modules=["main", "hardware_check"],
+        python_requires=">=3.12,<3.14",
+        py_modules=PY_MODULES,
         packages=find_packages(exclude=("docs", "tests")),
-        install_requires=[],
+        install_requires=read_requirements(),
         extras_require={"dev": ["pytest==9.0.1"]},
         cmdclass={
             "detect": DetectCommand,
@@ -240,4 +296,17 @@ elif setup is not None:
         },
     )
 
-# Next step: add installer actions for cloning Ostris/ComfyUI when detection reports missing paths.
+
+if __name__ == "__main__":
+    if setup is None:
+        if len(sys.argv) >= 2 and sys.argv[1] == "detect":
+            run_detection()
+        elif len(sys.argv) >= 2 and sys.argv[1] == "install_runtime":
+            install_runtime()
+        else:
+            raise SystemExit(
+                "setuptools is not installed. Supported bootstrap commands without setuptools: "
+                "`python setup.py detect` or `python setup.py install_runtime`."
+            )
+    else:
+        run_setuptools_setup()

@@ -116,3 +116,25 @@ def test_markdown_report_mentions_720p_upscale_strategy() -> None:
 
 
 # Next step: add integration tests for setup.py path detection with temporary Pinokio-style folders.
+
+
+def test_python_support_window_matches_dependency_pins() -> None:
+    """Runtime setup should reject interpreters beyond the pinned UI/video stack."""
+
+    import setup as project_setup
+
+    assert project_setup.is_supported_python((3, 12))
+    assert project_setup.is_supported_python((3, 13))
+    assert not project_setup.is_supported_python((3, 11))
+    assert not project_setup.is_supported_python((3, 14))
+
+
+def test_requirements_avoid_known_numpy_opencv_conflict() -> None:
+    """OpenCV 4.12 requires numpy <2.3, so the app pin must stay below that ceiling."""
+
+    import setup as project_setup
+
+    requirements = project_setup.read_requirements()
+    assert "numpy==2.2.6" in requirements
+    assert "opencv-python==4.12.0.88" in requirements
+    assert "numpy==2.3.5" not in requirements
