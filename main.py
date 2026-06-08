@@ -24,6 +24,7 @@ import gradio as gr
 from dotenv import load_dotenv
 
 import chat_parser
+import character_creator
 import cloud_manager
 import exporter
 import hardware_check
@@ -1231,6 +1232,9 @@ def build_ui() -> gr.Blocks:
                 create_partner_shortcut = gr.Button("Create New Partner", variant="primary", interactive=initial_interactive)
                 create_partner_shortcut.click(lambda: gr.update(selected="Create Partner"), outputs=app_tabs)
 
+            with gr.Tab("Character Creator", id="Character Creator", visible=initial_interactive) as character_creator_tab:
+                character_creator_components = character_creator.build_character_creator_tab(initial_interactive=initial_interactive)
+
             with gr.Tab("Create Partner", id="Create Partner", visible=initial_interactive) as partner_tab:
                 gr.Markdown(
                     "Generate 10–20 starter images, manually score Anatomy/Physics/Style, and register approved characters at an 80+ last-10 average. "
@@ -1398,7 +1402,8 @@ def build_ui() -> gr.Blocks:
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
-                gr.update(selected="Setup" if not unlocked else "Character Library"),
+                gr.update(visible=unlocked),
+                gr.update(selected="Setup" if not unlocked else "Character Creator"),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
@@ -1409,6 +1414,7 @@ def build_ui() -> gr.Blocks:
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
+                *[gr.update(interactive=unlocked) for _ in character_creator_components["gated_controls"]],
                 *[gr.update(interactive=unlocked) for _ in timeline_components["gated_controls"]],
             ]
 
@@ -1420,6 +1426,7 @@ def build_ui() -> gr.Blocks:
                 adult_gate_banner,
                 training_tab,
                 library_tab,
+                character_creator_tab,
                 partner_tab,
                 generate_tab,
                 timeline_tab,
@@ -1434,6 +1441,7 @@ def build_ui() -> gr.Blocks:
                 chat_button,
                 apply_regeneration_button,
                 export_button,
+                *character_creator_components["gated_controls"],
                 *timeline_components["gated_controls"],
             ],
         )
