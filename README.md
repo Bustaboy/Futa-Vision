@@ -5,6 +5,7 @@ Futa-Vision is the working repository for **FutaSlime Director**, a local-first 
 The canonical project source document is available at:
 
 - [FutaSlime Director — Comprehensive Development Plan & Roadmap](docs/source_document.md)
+- [Futa-Vision — Product Roadmap](docs/product_roadmap.md)
 
 ## Phase 0 skeleton
 
