@@ -1733,7 +1733,8 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
         "1. Review any repair suggestions below.\n"
         "2. Start the app with `python main.py` when you are ready.\n"
         "3. Open the Setup tab and confirm hardware/cloud status before generation.\n"
-        "4. If anything looks off later, run `python installer.py repair`.",
+        "4. Verify media writes any time with `python installer.py test-samples`.\n"
+        "5. If anything looks off later, run `python installer.py repair`.",
         title="Wizard complete",
         border_style="green",
     ))
@@ -1859,7 +1860,7 @@ def command_repair(args: argparse.Namespace) -> int:
     render_repair_suggestions(detections, report)
     write_installer_manifest(detections=detections, report=report, overall_status="repaired")
     CONSOLE.print(Panel(
-        "Repair Mode complete. If a warning remains, follow the listed recovery action and rerun `python installer.py repair`.",
+        "Repair Mode complete. Verify output permissions with `python installer.py test-samples`. If a warning remains, follow the listed recovery action and rerun `python installer.py repair`.",
         title="Repair complete",
         border_style="green",
     ))
@@ -1894,6 +1895,7 @@ def command_install(args: argparse.Namespace) -> int:
             f"Environment file: {ENV_PATH}",
             f"Installer log: {LOG_PATH}",
             f"Hardware profile: {state.hardware_profile}",
+            "Verification command: python installer.py test-samples",
             "Launch with: python main.py",
         ]),
         title="Setup complete",
