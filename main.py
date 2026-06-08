@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -41,6 +42,7 @@ INSTALLER_MANIFEST_PATH = Path("settings/installer_manifest.json")
 INSTALLER_STATE_PATH = Path("settings/installer_state.json")
 INSTALLER_LOG_PATH = Path("logs/installer.log")
 ADULT_CONFIRMATION_ENV = "FUTA_VISION_REQUIRE_ADULT_CONFIRMATION"
+LOGGER = logging.getLogger("futa_vision_app")
 
 
 @dataclass(slots=True)
@@ -778,18 +780,37 @@ def load_installer_manifest(path: Path | None = None) -> dict[str, Any]:
     return merged
 
 
+def installation_state(manifest: dict[str, Any] | None = None) -> tuple[str, str, str]:
+    """Return normalized installer state, tone, and beginner-friendly message."""
+
+    current = manifest or load_installer_manifest()
+    overall = str(current.get("overall_status") or "unknown").lower()
+    warnings = [str(warning) for warning in current.get("warnings", [])]
+    sample_status = str(current.get("sample_tests", {}).get("status") or "not_run").lower()
+
+    if current.get("manifest_error") or overall in {"failed", "needs_repair", "error"}:
+        return "repair_required", "error", "Installer data needs repair. Run the safe repair button or setup.bat to rebuild status files."
+    if not current.get("manifest_exists"):
+        return "first_run", "warning", "Welcome! Run the guided installer once so Futa-Vision can create folders, detect tools, and write verification status."
+    if not INSTALLER_STATE_PATH.exists() and overall not in {"installed", "repaired", "samples_passed"}:
+        return "first_run", "warning", "First-run setup is not complete yet. The app is safe to browse, but run the installer before generation or training."
+    if overall in {"not_configured", "unknown"}:
+        return "needs_setup", "warning", "Installer setup is incomplete. Run repair to refresh paths, sample tests, and hardware recommendations."
+    if sample_status in {"failed", "error"}:
+        return "samples_failed", "error", "Sample verification failed. Check logs/installer.log, then rerun repair."
+    if sample_status in {"not_run", "samples_warning", "warning"}:
+        return "verify_recommended", "warning", "Sample verification has not fully passed yet. Run repair or `python installer.py test-samples`."
+    if any("corrupt" in warning.lower() or "permission" in warning.lower() for warning in warnings):
+        return "repair_recommended", "error", "A serious installer warning was recorded. Run repair before heavy jobs."
+    if any("not detected" in warning.lower() or "missing" in warning.lower() for warning in warnings):
+        return "optional_paths_missing", "warning", "Optional tools or models are missing. Local UI can open; install ComfyUI/Ostris or use RunPod when needed."
+    return "ready", "success", "Installer status is ready. You can generate locally with safe presets or use cloud only after explicit approval."
+
+
 def installation_needs_attention(manifest: dict[str, Any] | None = None) -> bool:
     """Return True when first-run setup or repair should be highlighted in the UI."""
 
-    current = manifest or load_installer_manifest()
-    if not current.get("manifest_exists"):
-        return True
-    if not INSTALLER_STATE_PATH.exists() and current.get("overall_status") not in {"installed", "repaired", "samples_passed"}:
-        return True
-    if current.get("overall_status") in {"not_configured", "failed", "needs_repair"}:
-        return True
-    return any("not detected" in str(warning).lower() or "missing" in str(warning).lower() for warning in current.get("warnings", []))
-
+    return installation_state(manifest)[0] != "ready"
 
 def _markdown_list(items: dict[str, Any]) -> str:
     """Render a compact Markdown bullet list for dict status values."""
@@ -800,14 +821,61 @@ def _markdown_list(items: dict[str, Any]) -> str:
 
 
 def installer_status_badge(manifest: dict[str, Any]) -> str:
-    """Return a small colored HTML status badge for the Settings tab."""
+    """Return a clean green/yellow/red HTML status badge for the Settings tab."""
 
-    if manifest.get("manifest_error"):
-        return status_badge("Manifest needs repair", "warning")
-    if installation_needs_attention(manifest):
-        return status_badge("Setup attention needed", "warning")
-    return status_badge("Installer ready", "success")
+    state, tone, _message = installation_state(manifest)
+    labels = {
+        "ready": "Installed / Ready",
+        "first_run": "First Run Setup",
+        "needs_setup": "Setup Needed",
+        "verify_recommended": "Verify Samples",
+        "samples_failed": "Samples Failed",
+        "repair_required": "Repair Required",
+        "repair_recommended": "Repair Recommended",
+        "optional_paths_missing": "Optional Paths Missing",
+    }
+    return status_badge(labels.get(state, "Installer Status Unknown"), tone)
 
+
+def installer_status_summary_card(manifest: dict[str, Any]) -> str:
+    """Render the most important installer state as a beginner-friendly status card."""
+
+    _state, tone, message = installation_state(manifest)
+    palette = {
+        "success": ("#166534", "#f0fdf4", "#bbf7d0"),
+        "warning": ("#92400e", "#fffbeb", "#fde68a"),
+        "error": ("#991b1b", "#fef2f2", "#fecaca"),
+    }
+    color, background, border = palette.get(tone, palette["warning"])
+    return (
+        f"<div style='border:1px solid {border};background:{background};border-radius:14px;padding:1rem;margin:0.75rem 0;'>"
+        f"<div style='font-size:1.05rem;font-weight:800;color:{color};margin-bottom:0.35rem;'>"
+        f"{installer_status_badge(manifest)} Phase 5 installation status</div>"
+        f"<div style='color:{color};font-weight:600;'>{message}</div>"
+        "</div>"
+    )
+
+
+def first_run_guidance_markdown(manifest: dict[str, Any] | None = None) -> str:
+    """Return concise first-run guidance for the Settings tab and top banner."""
+
+    current = manifest or load_installer_manifest()
+    state, _tone, _message = installation_state(current)
+    if state == "ready":
+        return "✅ Setup is complete. If paths change later, use **Run Installer / Repair Installation** safely at any time."
+    if state == "first_run":
+        return (
+            "### 👋 First run guide\n"
+            "1. Click **🚀 Run Installer / Repair Installation (Recommended)** below.\n"
+            "2. Wait for folder creation, hardware detection, and sample image/clip verification.\n"
+            "3. Confirm this status turns green before starting training or video generation.\n"
+            "4. On RTX 4070 8GB, keep the default 720p + VRAM safety preset for first tests."
+        )
+    return (
+        "### 🛠️ Repair guide\n"
+        "Repair is idempotent and does not delete outputs. It refreshes paths, logs, sample verification, and the installer manifest. "
+        "If repair still reports warnings, open `logs/installer.log` and follow the displayed suggestion."
+    )
 
 def _workflow_markdown(workflows: list[dict[str, Any]]) -> str:
     """Render recommended workflow readiness without exposing raw JSON first."""
@@ -833,7 +901,7 @@ def installer_status_markdown() -> str:
     last_sample = manifest.get("last_sample_test_result", {})
     runpod = manifest.get("runpod", {})
     last_run = manifest.get("last_run_summary", {})
-    attention = "⚠️ First-run or repair is recommended." if installation_needs_attention(manifest) else "✅ Installer state looks ready."
+    _state, _tone, attention = installation_state(manifest)
     manifest_note = ""
     if not manifest.get("manifest_exists"):
         manifest_note = "\n\n> Manifest file is missing. The app is using safe defaults until setup or repair writes a fresh file."
@@ -841,9 +909,11 @@ def installer_status_markdown() -> str:
         manifest_note = f"\n\n> Manifest problem: `{manifest['manifest_error']}`. Repair can rebuild this file without deleting user outputs."
     return f"""
 ## Phase 5 Installer Status
-{installer_status_badge(manifest)}
+{installer_status_summary_card(manifest)}
 
 {attention}{manifest_note}
+
+{first_run_guidance_markdown(manifest)}
 
 - Overall status: `{manifest.get('overall_status', 'unknown')}`
 - Last successful installer run: `{manifest.get('last_successful_installer_run') or 'never'}`
@@ -871,14 +941,17 @@ def installer_status_markdown() -> str:
 def installation_attention_banner() -> str:
     """Show a prominent top-of-app first-run/repair message."""
 
-    if not installation_needs_attention():
+    manifest = load_installer_manifest()
+    state, tone, message = installation_state(manifest)
+    if state == "ready":
         return "✅ Phase 5 installer status is ready. Open Settings any time for diagnostics or repair tools."
+    heading = "## 👋 First-time setup recommended" if state == "first_run" else "## ⚠️ Setup or repair recommended"
     return (
-        "## ⚠️ Setup or repair recommended\n"
-        "Futa-Vision can open, but generation/training paths may be incomplete or the manifest may need repair. "
-        "Open the ⚙️ Settings tab and click **🛠️ Run Installer / Repair Installation (safe)** before creating outputs."
+        f"{heading}\n"
+        f"{message}\n\n"
+        "Open the ⚙️ Settings tab and click **🚀 Run Installer / Repair Installation (Recommended)** before creating outputs. "
+        "The repair path is safe to rerun and will not delete your library or generated videos."
     )
-
 
 def run_installer_repair_from_ui() -> tuple[str, str]:
     """Run installer.py safely from Gradio and return refreshed status plus console output."""
@@ -891,18 +964,23 @@ def run_installer_repair_from_ui() -> tuple[str, str]:
         "--privacy-ack",
     ]
     try:
+        LOGGER.info("Starting Phase 5 installer/repair from Settings tab: %s", " ".join(command))
         completed = subprocess.run(command, cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=1800, check=False)
     except subprocess.TimeoutExpired:
-        return settings_markdown(), "Installer timed out after 30 minutes. Check logs/installer.log and run setup.bat if dependencies are still installing."
+        LOGGER.exception("Installer timed out from Settings tab")
+        return settings_markdown(), "⏱️ Installer timed out after 30 minutes. Check logs/installer.log and run setup.bat if dependencies are still installing."
     except OSError as exc:
-        return settings_markdown(), f"Could not start installer: {exc}"
+        LOGGER.exception("Could not start installer from Settings tab")
+        return settings_markdown(), f"❌ Could not start installer: {exc}. Try running setup.bat from File Explorer or `python installer.py` in a terminal."
 
     output = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
     if not output:
         output = "Installer finished without console output."
     if completed.returncode == 0:
-        return settings_markdown(), "✅ Installer / repair completed successfully. Settings were refreshed.\n\n" + output[-12000:]
-    return settings_markdown(), f"❌ Installer exited with code {completed.returncode}. Review logs/installer.log, then rerun repair or setup.bat.\n\n{output[-12000:]}"
+        LOGGER.info("Installer/repair completed successfully from Settings tab")
+        return settings_markdown(), "✅ Installer / repair completed successfully. Settings were refreshed. Run `python installer.py test-samples` any time for a quick verification.\n\n" + output[-12000:]
+    LOGGER.error("Installer exited with code %s from Settings tab", completed.returncode)
+    return settings_markdown(), f"❌ Installer exited with code {completed.returncode}. Review logs/installer.log, then rerun repair or setup.bat. Quick verification after fixing: `python installer.py test-samples`.\n\n{output[-12000:]}"
 
 
 def settings_markdown() -> str:
@@ -976,7 +1054,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
-            "Phase 4.2: final polish, VRAM-safe export, settings finalization, and cloud-aware UX."
+            "Phase 5: guided installer, VRAM-safe setup, settings polish, and beginner-friendly repair tools."
         )
         gr.HTML(app_polish_status())
         gr.Markdown(installation_attention_banner())
@@ -1031,7 +1109,7 @@ def build_ui() -> gr.Blocks:
 
             with gr.Tab("⚙️ Settings", id="Settings"):
                 gr.Markdown(
-                    "Finalize cloud, performance, safety, and theme preferences for Phase 4.2. "
+                    "Finalize installer, cloud, performance, safety, and theme preferences for Phase 5. "
                     "Settings are stored locally in `settings/futa_vision_settings.json`; cloud uploads still require per-job approval."
                 )
                 settings_status = gr.Markdown(settings_markdown())
@@ -1077,10 +1155,10 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     save_settings_button = gr.Button("Save Settings", variant="primary")
                     refresh_settings_button = gr.Button("Refresh Settings", variant="secondary")
-                    run_installer_button = gr.Button("🛠️ Run Installer / Repair Installation (safe)", variant="primary", size="lg")
+                    run_installer_button = gr.Button("🚀 Run Installer / Repair Installation (Recommended)", variant="primary", size="lg")
                 gr.Markdown(
-                    "**Repair is safe to run repeatedly.** It refreshes folders, paths, sample-test status, and the installer manifest without deleting outputs. "
-                    "It may take several minutes if dependencies or hardware checks are slow."
+                    "**Recommended for first run. Repair is safe to run repeatedly.** It refreshes folders, paths, sample-test status, and the installer manifest without deleting outputs. "
+                    "It may take several minutes if dependencies or hardware checks are slow. When it finishes, this status should turn green; you can also run `python installer.py test-samples` as a quick verification."
                 )
                 installer_run_output = gr.Textbox(label="Installer / Repair Output", lines=12, max_lines=18, interactive=False)
                 settings_json = gr.Code(label="Settings JSON (secrets redacted in display)", language="json")
