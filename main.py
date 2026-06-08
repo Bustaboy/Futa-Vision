@@ -1,7 +1,7 @@
 """Gradio entry point for the Futa-Vision Phase 0 project skeleton.
 
 The UI follows the source document's fast-start path: Gradio 5.x Blocks with
-Setup, Library, Create Partner, Generate Video, and Timeline tabs. Heavy AI
+Setup, Library, Create Partner, Character Creator, Generate Video, and Timeline tabs. Heavy AI
 operations are intentionally stubbed with actionable TODOs before ComfyUI,
 Ostris, RunPod, Phase 0.5 General Physics LoRA, and Phase 1 library/scoring
 integrations are implemented.
@@ -23,6 +23,7 @@ from typing import Any
 import gradio as gr
 from dotenv import load_dotenv
 
+import character_creator
 import chat_parser
 import cloud_manager
 import exporter
@@ -110,8 +111,8 @@ def gate_update(confirmed: bool) -> list[Any]:
     return [
         adult_confirmation_status(confirmed),
         gr.update(visible=not unlocked),
-        *[gr.update(visible=not unlocked) for _ in range(5)],
-        *[gr.update(visible=unlocked) for _ in range(5)],
+        *[gr.update(visible=not unlocked) for _ in range(6)],
+        *[gr.update(visible=unlocked) for _ in range(6)],
         *[gr.update(interactive=unlocked) for _ in range(4)],
     ]
 
@@ -1260,6 +1261,10 @@ def build_ui() -> gr.Blocks:
                     outputs=[score_output, generated_scores, registration_json],
                 )
 
+
+            with gr.Tab("Character Creator", id="Character Creator", visible=initial_interactive) as character_creator_tab:
+                character_creator_components = character_creator.build_character_creator_tab(initial_interactive=initial_interactive)
+
             with gr.Tab("Generate Video", id="Generate Video", visible=initial_interactive) as generate_tab:
                 gr.Markdown(
                     "Create 5–10 second clips at 720p, auto-review with Florence-2, smart-loop to longer segments, "
@@ -1398,11 +1403,13 @@ def build_ui() -> gr.Blocks:
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
                 gr.update(visible=unlocked),
+                gr.update(visible=unlocked),
                 gr.update(selected="Setup" if not unlocked else "Character Library"),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
+                *[gr.update(interactive=unlocked) for _ in character_creator_components["gated_controls"]],
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
                 gr.update(interactive=unlocked),
@@ -1421,6 +1428,7 @@ def build_ui() -> gr.Blocks:
                 training_tab,
                 library_tab,
                 partner_tab,
+                character_creator_tab,
                 generate_tab,
                 timeline_tab,
                 app_tabs,
@@ -1428,6 +1436,7 @@ def build_ui() -> gr.Blocks:
                 use_scene_button,
                 create_partner_shortcut,
                 score_button,
+                *character_creator_components["gated_controls"],
                 generate_plan,
                 generate_video,
                 preview_characters,
