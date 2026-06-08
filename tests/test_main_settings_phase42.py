@@ -72,3 +72,17 @@ def test_settings_markdown_includes_phase42_status(tmp_path: Path, monkeypatch) 
     assert "Current Phase 4.2 Settings" in markdown
     assert "4070 8GB Safe Defaults" in markdown
     assert "outputs/final_videos" in markdown
+
+
+def test_installer_status_uses_manifest_defaults(tmp_path: Path, monkeypatch) -> None:
+    manifest_path = tmp_path / "installer_manifest.json"
+    monkeypatch.setattr(main, "INSTALLER_MANIFEST_PATH", manifest_path)
+
+    manifest = main.load_installer_manifest()
+    markdown = main.installer_status_markdown()
+
+    assert manifest["selected_hardware_profile"] == "low_vram_8gb"
+    assert manifest["manifest_exists"] is False
+    assert main.installer_needs_attention(manifest) is True
+    assert "Phase 5 Installation Status" in markdown
+    assert "Run Installer / Repair Installation" in markdown

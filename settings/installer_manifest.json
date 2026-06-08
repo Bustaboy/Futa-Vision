@@ -1,0 +1,49 @@
+{
+  "schema_version": "phase5.installer_manifest.v1",
+  "selected_hardware_profile": "low_vram_8gb",
+  "detected_paths": {
+    "ostris": null,
+    "comfyui": null,
+    "pinokio": null
+  },
+  "comfyui": {
+    "required_nodes": {
+      "ComfyUI-Manager": "unknown",
+      "ComfyUI-VideoHelperSuite": "unknown",
+      "ComfyUI-LTXVideo": "unknown",
+      "ComfyUI-WanVideoWrapper": "unknown"
+    },
+    "recommended_models": {
+      "sdxl_checkpoint": "missing",
+      "ltx_video_model": "missing",
+      "wan_video_model": "missing",
+      "ipadapter": "missing",
+      "controlnet": "missing",
+      "upscaler": "missing"
+    }
+  },
+  "folders": {
+    "cache": "cache",
+    "outputs": "outputs",
+    "final_videos": "outputs/final_videos",
+    "logs": "logs"
+  },
+  "sample_tests": {
+    "status": "not_run",
+    "summary": "Sample image/clip tests have not been run yet.",
+    "image_path": null,
+    "clip_path": null,
+    "warnings": []
+  },
+  "runpod": {
+    "ready": false,
+    "api_key_present": false,
+    "template_configured": false,
+    "last_status": "not_configured"
+  },
+  "last_successful_run": null,
+  "overall_status": "not_installed",
+  "warnings": [
+    "First run is not complete. Click Run Installer / Repair Installation or start setup.bat."
+  ]
+}

@@ -48,6 +48,7 @@ MIN_CACHE_FREE_GB = 100.0
 
 SETTINGS_DIR = ROOT / "settings"
 INSTALLER_STATE_PATH = SETTINGS_DIR / "installer_state.json"
+INSTALLER_MANIFEST_PATH = SETTINGS_DIR / "installer_manifest.json"
 APP_SETTINGS_PATH = SETTINGS_DIR / "futa_vision_settings.json"
 ENV_PATH = ROOT / ".env"
 ENV_EXAMPLE_PATH = ROOT / ".env.example"
@@ -484,6 +485,154 @@ def candidate_to_dict(candidate: InstallCandidate) -> dict[str, str]:
     }
 
 
+
+def detection_primary_path(detections: dict[str, list[InstallCandidate]], kind: str) -> str | None:
+    """Return the highest-confidence detected path for a manifest bucket."""
+
+    candidates = detections.get(kind, [])
+    return str(candidates[0].path) if candidates else None
+
+
+def profile_manifest_name(profile: HardwareProfile | str | None) -> str:
+    """Map installer profile enums to user-facing manifest profile names."""
+
+    value = profile.value if isinstance(profile, HardwareProfile) else (profile or "")
+    if value == HardwareProfile.LOCAL_LOW_VRAM.value:
+        return "low_vram_8gb"
+    if value == HardwareProfile.LOCAL_STANDARD.value:
+        return "local_standard"
+    if value == HardwareProfile.CLOUD_RECOMMENDED.value:
+        return "cloud_recommended"
+    return value or "low_vram_8gb"
+
+
+def comfyui_required_node_status(comfyui_path: Path | None) -> dict[str, str]:
+    """Check whether required/recommended ComfyUI custom nodes are present."""
+
+    status = {node: "unknown" for node in COMFYUI_NODE_HINTS}
+    if comfyui_path is None:
+        return status
+    custom_nodes = comfyui_path / "custom_nodes"
+    for node in COMFYUI_NODE_HINTS:
+        status[node] = "installed" if (custom_nodes / node).exists() else "missing"
+    return status
+
+
+def comfyui_model_status(comfyui_path: Path | None) -> dict[str, str]:
+    """Check broad recommended model categories without downloading anything."""
+
+    models = {
+        "sdxl_checkpoint": ("models/checkpoints", ("*.safetensors", "*.ckpt")),
+        "ltx_video_model": ("models/ltxv", ("*.safetensors", "*.pt", "*.gguf")),
+        "wan_video_model": ("models/diffusion_models", ("*wan*.safetensors", "*wan*.gguf")),
+        "ipadapter": ("models/ipadapter", ("*.safetensors", "*.bin")),
+        "controlnet": ("models/controlnet", ("*.safetensors", "*.pth")),
+        "upscaler": ("models/upscale_models", ("*.pth", "*.safetensors")),
+    }
+    if comfyui_path is None:
+        return {name: "missing" for name in models}
+    result: dict[str, str] = {}
+    for name, (relative_dir, patterns) in models.items():
+        folder = comfyui_path / relative_dir
+        result[name] = "present" if folder.exists() and any(folder.glob(pattern) for pattern in patterns) else "missing"
+    return result
+
+
+def sample_test_summary(image_path: str | None, clip_path: str | None, warnings: list[str]) -> dict[str, Any]:
+    """Summarize installer sample media results for the persistent manifest."""
+
+    if image_path and clip_path and not warnings:
+        status = "passed"
+        summary = "Sample image and short clip were created successfully."
+    elif image_path or clip_path:
+        status = "partial"
+        summary = "Sample tests completed with warnings."
+    else:
+        status = "not_run"
+        summary = "Sample image/clip tests have not been run yet."
+    return {
+        "status": status,
+        "summary": summary,
+        "image_path": image_path,
+        "clip_path": clip_path,
+        "warnings": warnings,
+    }
+
+
+def build_installer_manifest(
+    detections: dict[str, list[InstallCandidate]],
+    profile: HardwareProfile | str | None,
+    report: HardwareReport | None = None,
+    state: InstallerState | None = None,
+    sample_warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build the Phase 5 manifest consumed by main.py Settings status."""
+
+    env = load_env_file()
+    comfyui_text = detection_primary_path(detections, "comfyui")
+    comfyui_path = Path(comfyui_text) if comfyui_text else None
+    warnings = list(state.warnings if state else [])
+    if report:
+        warnings.extend(warning for warning in report.warnings if warning not in warnings)
+    if sample_warnings:
+        warnings.extend(warning for warning in sample_warnings if warning not in warnings)
+    missing_nodes = [node for node, status in comfyui_required_node_status(comfyui_path).items() if status == "missing"]
+    if missing_nodes:
+        warnings.append("Missing ComfyUI nodes: " + ", ".join(missing_nodes))
+    runpod_key_present = bool(env.get("RUNPOD_API_KEY") or os.getenv("RUNPOD_API_KEY"))
+    sample = sample_test_summary(
+        state.sample_image_path if state else None,
+        state.sample_clip_path if state else None,
+        sample_warnings or [],
+    )
+    overall_status = "installed" if state and state.adult_confirmed and state.privacy_acknowledged else "repair_needed"
+    if not state:
+        overall_status = "not_installed"
+    return {
+        "schema_version": "phase5.installer_manifest.v1",
+        "selected_hardware_profile": profile_manifest_name(profile),
+        "detected_paths": {
+            "ostris": detection_primary_path(detections, "ostris"),
+            "comfyui": comfyui_text,
+            "pinokio": detection_primary_path(detections, "pinokio"),
+        },
+        "comfyui": {
+            "required_nodes": comfyui_required_node_status(comfyui_path),
+            "recommended_models": comfyui_model_status(comfyui_path),
+        },
+        "folders": {
+            "cache": str(ROOT / "cache"),
+            "outputs": str(ROOT / "outputs"),
+            "final_videos": str(ROOT / "outputs" / "final_videos"),
+            "logs": str(ROOT / "logs"),
+        },
+        "sample_tests": sample,
+        "runpod": {
+            "ready": runpod_key_present,
+            "api_key_present": runpod_key_present,
+            "template_configured": bool(env.get("RUNPOD_ENDPOINT_ID") or env.get("RUNPOD_POD_ID")),
+            "last_status": "configured" if runpod_key_present else "not_configured",
+        },
+        "last_successful_run": state.updated_at if state else None,
+        "overall_status": overall_status,
+        "warnings": sorted(set(warnings)),
+    }
+
+
+def write_installer_manifest(
+    detections: dict[str, list[InstallCandidate]],
+    profile: HardwareProfile | str | None,
+    report: HardwareReport | None = None,
+    state: InstallerState | None = None,
+    sample_warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    """Persist settings/installer_manifest.json for main.py first-run/repair UI."""
+
+    manifest = build_installer_manifest(detections, profile, report=report, state=state, sample_warnings=sample_warnings)
+    write_json(INSTALLER_MANIFEST_PATH, json_safe(manifest))
+    return manifest
+
+
 def first_existing_path(paths: Iterable[Path]) -> Path | None:
     """Return the first path that exists, expanded/resolved for stable status output."""
 
@@ -544,27 +693,31 @@ def get_install_status() -> dict[str, Any]:
     """Return a JSON-safe status snapshot for future main.py startup integration."""
 
     state = read_json(INSTALLER_STATE_PATH)
+    manifest = read_json(INSTALLER_MANIFEST_PATH)
     settings = read_json(APP_SETTINGS_PATH)
     env = load_env_file()
     missing_dirs = [path for path in REQUIRED_STATUS_DIRS if not path.exists()]
     status = {
         "schema_version": INSTALLER_SCHEMA_VERSION,
         "root": ROOT,
-        "is_first_run": not INSTALLER_STATE_PATH.exists() or not bool(state.get("installed_at")),
+        "is_first_run": not INSTALLER_MANIFEST_PATH.exists() or not bool(state.get("installed_at")),
         "state_path": INSTALLER_STATE_PATH,
+        "manifest_path": INSTALLER_MANIFEST_PATH,
         "settings_path": APP_SETTINGS_PATH,
         "env_path": ENV_PATH,
         "log_path": LOG_PATH,
         "state_exists": INSTALLER_STATE_PATH.exists(),
+        "manifest_exists": INSTALLER_MANIFEST_PATH.exists(),
         "settings_exists": APP_SETTINGS_PATH.exists(),
         "env_exists": ENV_PATH.exists(),
         "adult_confirmed": bool(state.get("adult_confirmed", False)),
         "privacy_acknowledged": bool(state.get("privacy_acknowledged", False)),
-        "hardware_profile": state.get("hardware_profile") or env.get("FUTA_VISION_HARDWARE_PROFILE"),
+        "hardware_profile": manifest.get("selected_hardware_profile") or state.get("hardware_profile") or env.get("FUTA_VISION_HARDWARE_PROFILE"),
         "runpod_configured": bool(state.get("runpod_configured") or env.get("RUNPOD_API_KEY")),
         "missing_required_dirs": missing_dirs,
-        "warnings": state.get("warnings", []),
-        "updated_at": state.get("updated_at"),
+        "warnings": manifest.get("warnings") or state.get("warnings", []),
+        "updated_at": manifest.get("last_successful_run") or state.get("updated_at"),
+        "overall_status": manifest.get("overall_status"),
         "settings_schema_version": settings.get("schema_version"),
     }
     status["needs_repair"] = needs_repair(status)
@@ -583,6 +736,7 @@ def needs_repair(status: dict[str, Any] | None = None) -> bool:
     current = status or get_install_status()
     return bool(
         current.get("is_first_run")
+        or not current.get("manifest_exists")
         or not current.get("settings_exists")
         or not current.get("env_exists")
         or not current.get("adult_confirmed")
@@ -1496,6 +1650,7 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
         warnings=all_warnings,
     )
     write_json(INSTALLER_STATE_PATH, json_safe(state))
+    write_installer_manifest(detections, profile, report=report, state=state, sample_warnings=sample_warnings)
     CONSOLE.print(Panel(
         "[bold green]Installation successful! You can now launch Futa-Vision.[/bold green]\n"
         "Next steps:\n"
@@ -1616,8 +1771,26 @@ def command_repair(args: argparse.Namespace) -> int:
     render_detection_table(detections)
     render_hardware_report(report)
     render_repair_suggestions(detections, report)
+    existing_state = read_json(INSTALLER_STATE_PATH)
+    state_obj = None
+    if existing_state:
+        state_obj = InstallerState(
+            schema_version=existing_state.get("schema_version", INSTALLER_SCHEMA_VERSION),
+            installed_at=existing_state.get("installed_at"),
+            updated_at=now_iso(),
+            adult_confirmed=bool(existing_state.get("adult_confirmed", False)),
+            privacy_acknowledged=bool(existing_state.get("privacy_acknowledged", False)),
+            hardware_profile=existing_state.get("hardware_profile") or report.recommended_profile.value,
+            runpod_configured=bool(existing_state.get("runpod_configured", False)),
+            sample_image_path=existing_state.get("sample_image_path"),
+            sample_clip_path=existing_state.get("sample_clip_path"),
+            detected=existing_state.get("detected", {}),
+            warnings=existing_state.get("warnings", []),
+        )
+    write_installer_manifest(detections, (state_obj.hardware_profile if state_obj else report.recommended_profile), report=report, state=state_obj)
     CONSOLE.print(Panel(
-        "Repair Mode complete. If a warning remains, follow the listed recovery action and rerun `python installer.py repair`.",
+        f"Repair Mode complete. Updated manifest: {INSTALLER_MANIFEST_PATH}\n"
+        "If a warning remains, follow the listed recovery action and rerun `python installer.py repair`.",
         title="Repair complete",
         border_style="green",
     ))

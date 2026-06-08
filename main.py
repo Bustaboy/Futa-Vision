@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,6 +37,10 @@ from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, score_partn
 APP_TITLE = "Futa-Vision Director"
 SETTINGS_SCHEMA_VERSION = "phase4.2.settings.v1"
 DEFAULT_SETTINGS_PATH = Path("settings/futa_vision_settings.json")
+# Phase 5 installer status files shown in the Settings tab.
+INSTALLER_MANIFEST_PATH = Path("settings/installer_manifest.json")
+INSTALLER_STATE_PATH = Path("settings/installer_state.json")
+INSTALLER_LOG_PATH = Path("logs/installer.log")
 ADULT_CONFIRMATION_ENV = "FUTA_VISION_REQUIRE_ADULT_CONFIRMATION"
 
 
@@ -630,6 +636,167 @@ def load_app_settings(settings_path: Path | None = None) -> dict[str, Any]:
     return merged
 
 
+# Phase 5 installer manifest integration.
+def default_installer_manifest() -> dict[str, Any]:
+    """Return Phase 5 installer status defaults for first launch and tests."""
+
+    return {
+        "schema_version": "phase5.installer_manifest.v1",
+        "selected_hardware_profile": "low_vram_8gb",
+        "detected_paths": {
+            "ostris": None,
+            "comfyui": None,
+            "pinokio": None,
+        },
+        "comfyui": {
+            "required_nodes": {
+                "ComfyUI-Manager": "unknown",
+                "ComfyUI-VideoHelperSuite": "unknown",
+                "ComfyUI-LTXVideo": "unknown",
+                "ComfyUI-WanVideoWrapper": "unknown",
+            },
+            "recommended_models": {
+                "sdxl_checkpoint": "missing",
+                "ltx_video_model": "missing",
+                "wan_video_model": "missing",
+                "ipadapter": "missing",
+                "controlnet": "missing",
+                "upscaler": "missing",
+            },
+        },
+        "folders": {
+            "cache": "cache",
+            "outputs": "outputs",
+            "final_videos": "outputs/final_videos",
+            "logs": "logs",
+        },
+        "sample_tests": {
+            "status": "not_run",
+            "summary": "Sample image/clip tests have not been run yet.",
+            "image_path": None,
+            "clip_path": None,
+            "warnings": [],
+        },
+        "runpod": {
+            "ready": False,
+            "api_key_present": False,
+            "template_configured": False,
+            "last_status": "not_configured",
+        },
+        "last_successful_run": None,
+        "overall_status": "not_installed",
+        "warnings": [
+            "First run is not complete. Click Run Installer / Repair Installation or start setup.bat."
+        ],
+    }
+
+
+def load_installer_manifest(manifest_path: Path | None = None) -> dict[str, Any]:
+    """Load the Phase 5 installer manifest without crashing the Settings tab."""
+
+    target_path = manifest_path or INSTALLER_MANIFEST_PATH
+    defaults = default_installer_manifest()
+    if not target_path.exists():
+        return defaults | {"manifest_exists": False}
+    try:
+        payload = json.loads(target_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        defaults["overall_status"] = "repair_needed"
+        defaults["warnings"] = [f"Installer manifest is corrupt: {target_path}"]
+        return defaults | {"manifest_exists": True}
+    if not isinstance(payload, dict):
+        defaults["overall_status"] = "repair_needed"
+        defaults["warnings"] = [f"Installer manifest is not a JSON object: {target_path}"]
+        return defaults | {"manifest_exists": True}
+
+    merged = defaults
+    for key, value in payload.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key].update(value)
+        else:
+            merged[key] = value
+    merged["manifest_exists"] = True
+    return merged
+
+
+def installer_needs_attention(manifest: dict[str, Any] | None = None) -> bool:
+    """Return whether the UI should ask the user to run installer/repair."""
+
+    current = manifest or load_installer_manifest()
+    return bool(
+        not current.get("manifest_exists")
+        or current.get("overall_status") not in {"installed", "ready", "ok"}
+        or current.get("warnings")
+    )
+
+
+def installer_status_markdown() -> str:
+    """Render first-run/repair status for the Settings tab."""
+
+    manifest = load_installer_manifest()
+    paths = manifest.get("detected_paths", {}) if isinstance(manifest.get("detected_paths"), dict) else {}
+    sample = manifest.get("sample_tests", {}) if isinstance(manifest.get("sample_tests"), dict) else {}
+    runpod = manifest.get("runpod", {}) if isinstance(manifest.get("runpod"), dict) else {}
+    warnings = manifest.get("warnings") or []
+    warning_lines = "\n".join(f"  - {warning}" for warning in warnings) if warnings else "  - None"
+    tone = "warning" if installer_needs_attention(manifest) else "success"
+    heading = "Installer / Repair Needed" if installer_needs_attention(manifest) else "Installer Ready"
+    return (
+        f"## Phase 5 Installation Status\n"
+        f"{status_badge(heading, tone)}\n\n"
+        f"- Overall status: `{manifest.get('overall_status', 'unknown')}`\n"
+        f"- Last successful installer run: `{manifest.get('last_successful_run') or 'never'}`\n"
+        f"- Hardware profile: `{manifest.get('selected_hardware_profile') or 'unknown'}`\n"
+        f"- Ostris path: `{paths.get('ostris') or 'not detected'}`\n"
+        f"- ComfyUI path: `{paths.get('comfyui') or 'not detected'}`\n"
+        f"- Pinokio path: `{paths.get('pinokio') or 'not detected'}`\n"
+        f"- Cache folder: `{manifest.get('folders', {}).get('cache', 'cache')}`\n"
+        f"- Output folder: `{manifest.get('folders', {}).get('outputs', 'outputs')}`\n"
+        f"- Sample tests: `{sample.get('status', 'unknown')}` — {sample.get('summary', 'No summary recorded.')}\n"
+        f"- RunPod ready: `{bool(runpod.get('ready', False))}`\n"
+        f"- Installer log: `{INSTALLER_LOG_PATH}`\n"
+        "### Warnings\n"
+        f"{warning_lines}"
+    )
+
+
+def run_installer_or_repair() -> tuple[str, str]:
+    """Run the Phase 5 installer from Gradio and return refreshed status/log tail."""
+
+    first_run = not INSTALLER_MANIFEST_PATH.exists() and not INSTALLER_STATE_PATH.exists()
+    command = [sys.executable, "installer.py"]
+    if first_run:
+        command.extend(["--non-interactive", "--accept-adult", "--privacy-ack", "--skip-sample-tests"])
+    else:
+        command.extend(["repair", "--all"])
+
+    try:
+        completed = subprocess.run(command, cwd=Path(__file__).resolve().parent, capture_output=True, text=True, timeout=180, check=False)
+    except subprocess.TimeoutExpired:
+        return (
+            "## ⚠️ Installer is still running or timed out\nPlease open `setup.bat` for the full guided installer if this repeats.\n\n" + installer_status_markdown(),
+            "Installer command timed out after 180 seconds. See logs/installer.log if it exists.",
+        )
+    except OSError as exc:
+        return (
+            f"## ❌ Could not start installer\n{exc}\n\nTry double-clicking `setup.bat` from Windows Explorer.",
+            str(exc),
+        )
+
+    output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
+    if INSTALLER_LOG_PATH.exists():
+        try:
+            tail = "\n".join(INSTALLER_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()[-80:])
+        except OSError:
+            tail = output[-4000:]
+    else:
+        tail = output[-4000:]
+    prefix = "## ✅ Installer command finished" if completed.returncode == 0 else "## ⚠️ Installer needs attention"
+    return (
+        f"{prefix}\nCommand: `{' '.join(command)}`\nExit code: `{completed.returncode}`\n\n" + installer_status_markdown(),
+        tail or "No installer output captured.",
+    )
+
 def save_app_settings(
     runpod_api_key: str,
     default_cloud_mode: str,
@@ -702,7 +869,8 @@ def settings_markdown() -> str:
         f"- VRAM safety: `{settings['performance']['vram_safety']}`\n"
         f"- Adult gate required: `{settings['safety']['adult_gate_required']}`\n"
         f"- UI theme: `{settings['ui']['theme']}`\n"
-        "- Export path: `outputs/final_videos` with MP4 sidecar metadata."
+        "- Export path: `outputs/final_videos` with MP4 sidecar metadata.\n\n"
+        + installer_status_markdown()
     )
 
 
@@ -817,6 +985,19 @@ def build_ui() -> gr.Blocks:
                     "Settings are stored locally in `settings/futa_vision_settings.json`; cloud uploads still require per-job approval."
                 )
                 settings_status = gr.Markdown(settings_markdown())
+                # Phase 5 installer integration: prominent Settings-tab repair launcher.
+                with gr.Accordion("Phase 5 installer / repair", open=installer_needs_attention()):
+                    gr.Markdown(
+                        "If first-run setup is incomplete or a required folder/node is missing, click the button below. "
+                        "For a fully guided Windows console flow, double-click `setup.bat`."
+                    )
+                    run_installer_button = gr.Button("🛠️ Run Installer / Repair Installation", variant="primary")
+                    installer_log_tail = gr.Textbox(label="Installer log tail", lines=10, interactive=False)
+                    run_installer_button.click(
+                        run_installer_or_repair,
+                        outputs=[settings_status, installer_log_tail],
+                        show_progress="full",
+                    )
                 settings_defaults = load_app_settings()
                 with gr.Accordion("Cloud preferences", open=True):
                     settings_runpod_key = gr.Textbox(
@@ -867,6 +1048,7 @@ def build_ui() -> gr.Blocks:
                     show_progress="full",
                 )
                 refresh_settings_button.click(settings_markdown, outputs=settings_status)
+                demo.load(settings_markdown, outputs=settings_status)
 
             with gr.Tab("Train General Physics LoRA", id="Train General Physics LoRA", visible=initial_interactive) as training_tab:
                 gr.Markdown(
