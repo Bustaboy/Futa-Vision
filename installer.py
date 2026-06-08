@@ -25,6 +25,7 @@ import csv
 import importlib
 import importlib.util
 import json
+import logging
 import os
 import platform
 import shutil
@@ -50,6 +51,7 @@ INSTALLER_STATE_PATH = SETTINGS_DIR / "installer_state.json"
 APP_SETTINGS_PATH = SETTINGS_DIR / "futa_vision_settings.json"
 ENV_PATH = ROOT / ".env"
 ENV_EXAMPLE_PATH = ROOT / ".env.example"
+LOG_PATH = ROOT / "logs" / "installer.log"
 
 def _load_rich() -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
     """Load rich when available, otherwise provide tiny console fallbacks."""
@@ -152,6 +154,22 @@ def _load_rich() -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
 
 box, Console, Panel, Confirm, Prompt, Table, Text, install_rich_traceback = _load_rich()
 CONSOLE = Console()
+LOGGER = logging.getLogger("futa_vision_installer")
+
+
+def configure_logging() -> None:
+    """Configure simple file logging for installer troubleshooting."""
+
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if LOGGER.handlers:
+        return
+    LOGGER.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    LOGGER.addHandler(file_handler)
+    LOGGER.propagate = False
+    LOGGER.info("Installer logging started for %s", ROOT)
 
 
 class HardwareProfile(str, Enum):
@@ -257,29 +275,29 @@ class InstallerState:
     warnings: list[str]
 
 
-PROJECT_DIRECTORIES = [
-    "library/male/backups",
-    "library/partners",
-    "library/indexes",
-    "general_physics_lora",
-    "datasets/general_physics",
-    "datasets/male",
-    "datasets/partners",
-    "outputs/images",
-    "outputs/clips",
-    "outputs/extended_clips",
-    "outputs/final_videos",
-    "outputs/timelines/previews",
-    "outputs/timelines/thumbnails",
-    "outputs/timelines/frames",
-    "outputs/cloud_results",
-    "projects",
-    "workflows/comfy",
-    "workflows/ostris",
-    "logs",
-    "cache",
-    "cache/runpod",
-    "settings",
+PROJECT_DIRECTORIES: list[Path] = [
+    Path("library") / "male" / "backups",
+    Path("library") / "partners",
+    Path("library") / "indexes",
+    Path("general_physics_lora"),
+    Path("datasets") / "general_physics",
+    Path("datasets") / "male",
+    Path("datasets") / "partners",
+    Path("outputs") / "images",
+    Path("outputs") / "clips",
+    Path("outputs") / "extended_clips",
+    Path("outputs") / "final_videos",
+    Path("outputs") / "timelines" / "previews",
+    Path("outputs") / "timelines" / "thumbnails",
+    Path("outputs") / "timelines" / "frames",
+    Path("outputs") / "cloud_results",
+    Path("projects"),
+    Path("workflows") / "comfy",
+    Path("workflows") / "ostris",
+    Path("logs"),
+    Path("cache"),
+    Path("cache") / "runpod",
+    Path("settings"),
 ]
 
 PINOKIO_ROOT_CANDIDATES = [
@@ -320,12 +338,12 @@ PINOKIO_APP_MARKERS = {
     "futa_vision": ["Futa-Vision", "futa-vision", "futa_vision"],
 }
 
-COMFYUI_EXPECTED_DIRS = [
-    "models",
-    "models/checkpoints",
-    "models/loras",
-    "models/vae",
-    "custom_nodes",
+COMFYUI_EXPECTED_DIRS: list[Path] = [
+    Path("models"),
+    Path("models") / "checkpoints",
+    Path("models") / "loras",
+    Path("models") / "vae",
+    Path("custom_nodes"),
 ]
 
 COMFYUI_NODE_HINTS = [
@@ -372,10 +390,15 @@ def run_command(command: list[str], timeout: int = 30) -> subprocess.CompletedPr
     are missing. Detailed repair suggestions are printed elsewhere.
     """
 
+    LOGGER.info("Running command: %s", " ".join(command))
     try:
-        return subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
-    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    except (FileNotFoundError, subprocess.SubprocessError, OSError) as exc:
+        LOGGER.warning("Command unavailable or failed to start: %s (%s)", command[0], exc)
         return None
+    if completed.returncode != 0:
+        LOGGER.info("Command exited with %s: %s", completed.returncode, completed.stderr.strip())
+    return completed
 
 
 def run_with_status(message: str, action: Any) -> Any:
@@ -415,6 +438,7 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    LOGGER.info("Wrote JSON file: %s", path)
 
 
 def load_env_file(path: Path = ENV_PATH) -> dict[str, str]:
@@ -460,6 +484,7 @@ def merge_env_file(updates: dict[str, str], path: Path = ENV_PATH) -> None:
                 output.append(f"{key}={value}")
 
     path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+    LOGGER.info("Merged %s keys into environment file: %s", len(updates), path)
 
 
 def add_candidate(bucket: list[InstallCandidate], candidate: InstallCandidate) -> None:
@@ -761,8 +786,13 @@ def ensure_project_directories() -> list[Path]:
     created_or_present: list[Path] = []
     for relative in PROJECT_DIRECTORIES:
         path = ROOT / relative
-        path.mkdir(parents=True, exist_ok=True)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            LOGGER.exception("Could not create required folder: %s", path)
+            raise InstallerError(f"Could not create required folder `{path}`. Check permissions and available disk space.") from exc
         created_or_present.append(path)
+    LOGGER.info("Verified %s project directories", len(created_or_present))
     return created_or_present
 
 
@@ -792,6 +822,7 @@ def ensure_env_example() -> None:
         + "\n",
         encoding="utf-8",
     )
+    LOGGER.info("Created .env.example at %s", ENV_EXAMPLE_PATH)
 
 
 def ensure_env_defaults(detections: dict[str, list[InstallCandidate]], profile: HardwareProfile, runpod_key: str | None = None) -> None:
@@ -917,7 +948,65 @@ def reset_cache() -> list[Path]:
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         reset_paths.append(target)
+    LOGGER.info("Reset disposable cache folders: %s", [str(path) for path in reset_paths])
     return reset_paths
+
+
+def create_missing_comfyui_model_paths(detections: dict[str, list[InstallCandidate]]) -> list[Path]:
+    """Create expected ComfyUI model/custom-node folders when ComfyUI is detected."""
+
+    if not detections.get("comfyui"):
+        raise InstallerError("ComfyUI was not detected, so model paths cannot be repaired automatically. Set COMFYUI_PATH and rerun `python installer.py repair --fix-model-paths`.")
+    comfyui_root = Path(detections["comfyui"][0].path)
+    created: list[Path] = []
+    for relative in COMFYUI_EXPECTED_DIRS:
+        target = comfyui_root / relative
+        target.mkdir(parents=True, exist_ok=True)
+        created.append(target)
+    LOGGER.info("Verified ComfyUI model paths under %s", comfyui_root)
+    return created
+
+
+def render_comfyui_node_reinstall_help(detections: dict[str, list[InstallCandidate]]) -> None:
+    """Render non-destructive guidance for reinstalling missing ComfyUI nodes."""
+
+    comfy_path = Path(detections["comfyui"][0].path) if detections.get("comfyui") else None
+    lines = [
+        "1. Open ComfyUI and install/enable ComfyUI-Manager if it is missing.",
+        "2. In ComfyUI-Manager, install or reinstall these video nodes:",
+        *[f"   - {node}" for node in COMFYUI_NODE_HINTS],
+        "3. Restart ComfyUI and read its terminal for Python import errors.",
+        "4. If a node still fails, reinstall that node's requirements in the ComfyUI Python environment.",
+    ]
+    if comfy_path:
+        lines.append(f"Detected ComfyUI path: {comfy_path}")
+    else:
+        lines.append("ComfyUI was not detected yet; set COMFYUI_PATH in .env first.")
+    CONSOLE.print(Panel("\n".join(lines), title="Reinstall missing ComfyUI nodes", border_style="cyan"))
+    LOGGER.info("Displayed ComfyUI node reinstall guidance")
+
+
+def maybe_launch_app(args: argparse.Namespace) -> None:
+    """Offer to launch the Gradio app after a successful install."""
+
+    should_launch = bool(getattr(args, "launch", False))
+    if not should_launch and not args.non_interactive:
+        should_launch = Confirm.ask("Installation successful! Launch Futa-Vision now?", default=False)
+    if not should_launch:
+        CONSOLE.print("[blue]Launch skipped. Start later with `python main.py`.[/blue]")
+        LOGGER.info("Launch skipped")
+        return
+
+    main_path = ROOT / "main.py"
+    if not main_path.exists():
+        raise InstallerError(f"Cannot launch because `{main_path}` was not found. Run the installer from the Futa-Vision repo root.")
+    CONSOLE.print(Panel("[bold green]Installation successful! Launching Futa-Vision...[/bold green]\nOpen the local Gradio URL printed by main.py.", border_style="green"))
+    LOGGER.info("Launching Futa-Vision via %s", main_path)
+    try:
+        subprocess.Popen([sys.executable, str(main_path)], cwd=ROOT)
+    except OSError as exc:
+        LOGGER.exception("Failed to launch Futa-Vision")
+        raise InstallerError(f"Installation completed, but Futa-Vision could not be launched automatically: {exc}. Try `python main.py` manually.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -1317,6 +1406,7 @@ def run_first_run_wizard(args: argparse.Namespace, detections: dict[str, list[In
 def command_detect(args: argparse.Namespace) -> int:
     """Run detection only."""
 
+    LOGGER.info("Running detection command")
     ensure_project_directories()
     detections = scan_for_installs()
     report = build_hardware_report()
@@ -1339,13 +1429,18 @@ def command_test_samples(args: argparse.Namespace) -> int:
 
 
 def command_repair(args: argparse.Namespace) -> int:
-    """Print repair suggestions and optionally reset disposable cache folders."""
+    """Print repair suggestions and optionally perform safe repair actions."""
 
     ensure_project_directories()
+    detections = scan_for_installs()
     if getattr(args, "reset_cache", False):
         reset_paths = reset_cache()
-        CONSOLE.print(Panel("\n".join(str(path) for path in reset_paths), title="Reset disposable cache folders", border_style="green"))
-    detections = scan_for_installs()
+        CONSOLE.print(Panel("\n".join(str(path) for path in reset_paths), title="Clear cache complete", border_style="green"))
+    if getattr(args, "fix_model_paths", False):
+        repaired_paths = create_missing_comfyui_model_paths(detections)
+        CONSOLE.print(Panel("\n".join(str(path) for path in repaired_paths), title="Fixed/verified ComfyUI model paths", border_style="green"))
+    if getattr(args, "reinstall_node_help", False):
+        render_comfyui_node_reinstall_help(detections)
     report = build_hardware_report()
     render_detection_table(detections)
     render_hardware_report(report)
@@ -1356,6 +1451,7 @@ def command_repair(args: argparse.Namespace) -> int:
 def command_install(args: argparse.Namespace) -> int:
     """Run the full idempotent installer and first-run wizard."""
 
+    LOGGER.info("Running full installer")
     render_header()
     directories = ensure_project_directories()
     ensure_env_example()
@@ -1372,15 +1468,18 @@ def command_install(args: argparse.Namespace) -> int:
 
     CONSOLE.print(Panel(
         "\n".join([
+            "Installation successful!",
             f"Installer state: {INSTALLER_STATE_PATH}",
             f"App settings: {APP_SETTINGS_PATH}",
             f"Environment file: {ENV_PATH}",
+            f"Installer log: {LOG_PATH}",
             f"Hardware profile: {state.hardware_profile}",
             "Launch with: python main.py",
         ]),
         title="Setup complete",
         border_style="green",
     ))
+    maybe_launch_app(args)
     return 0
 
 
@@ -1396,6 +1495,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", choices=[profile.value for profile in HardwareProfile], help="Override detected hardware profile.")
     parser.add_argument("--runpod-key", help="Optional RunPod API key to write to .env.")
     parser.add_argument("--skip-sample-tests", action="store_true", help="Skip sample image and short clip tests.")
+    parser.add_argument("--launch", action="store_true", help="Launch main.py automatically after a successful install.")
 
     detect = subparsers.add_parser("detect", help="Detect engines and hardware without writing wizard state.")
     detect.add_argument("--repair", action="store_true", help="Also print repair suggestions.")
@@ -1404,8 +1504,10 @@ def build_parser() -> argparse.ArgumentParser:
     samples = subparsers.add_parser("test-samples", help="Create the installer sample image and short clip.")
     samples.set_defaults(func=command_test_samples)
 
-    repair = subparsers.add_parser("repair", help="Print setup repair suggestions.")
-    repair.add_argument("--reset-cache", action="store_true", help="Delete and recreate disposable cache/preview folders.")
+    repair = subparsers.add_parser("repair", help="Print setup repair suggestions and run safe repair actions.")
+    repair.add_argument("--reset-cache", action="store_true", help="Clear disposable cache/preview folders and recreate them.")
+    repair.add_argument("--fix-model-paths", action="store_true", help="Create missing ComfyUI model/custom_nodes folders when COMFYUI_PATH is detected.")
+    repair.add_argument("--reinstall-node-help", action="store_true", help="Show step-by-step ComfyUI node reinstall guidance.")
     repair.set_defaults(func=command_repair)
 
     subparsers.add_parser("install", help="Run the full installer wizard.").set_defaults(func=command_install)
@@ -1417,16 +1519,26 @@ def main(argv: list[str] | None = None) -> int:
     """Entrypoint with user-friendly rich errors."""
 
     install_rich_traceback(show_locals=False)
+    configure_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
+    LOGGER.info("Installer command started: %s", args)
     try:
-        return int(args.func(args))
+        result = int(args.func(args))
     except InstallerError as exc:
-        CONSOLE.print(Panel(str(exc), title="Installer stopped", border_style="red"))
+        LOGGER.error("Installer stopped: %s", exc)
+        CONSOLE.print(Panel(f"{exc}\n\nTroubleshooting log: {LOG_PATH}", title="Installer stopped", border_style="red"))
         return 2
     except KeyboardInterrupt:
+        LOGGER.warning("Installer cancelled by user")
         CONSOLE.print("\n[yellow]Installer cancelled by user.[/yellow]")
         return 130
+    except Exception:
+        LOGGER.exception("Unexpected installer failure")
+        CONSOLE.print(Panel(f"Unexpected installer failure. See troubleshooting log: {LOG_PATH}", title="Installer error", border_style="red"))
+        raise
+    LOGGER.info("Installer command completed with exit code %s", result)
+    return result
 
 
 if __name__ == "__main__":
