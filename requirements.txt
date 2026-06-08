@@ -1,6 +1,7 @@
 # Futa-Vision pinned runtime dependencies.
 # Reference docs/source_document.md and CURSOR_VIBE_CODING_GUIDE.md before changing these pins.
-# Python target: 3.12+ for the first Gradio implementation and local-first backend.
+# Python target: 3.12 or 3.13 for the pinned AI/video stack.
+# Python 3.14+ is intentionally not accepted until PyTorch/Gradio/video wheels are validated.
 
 # PyTorch stack for NVIDIA CUDA workflows used by ComfyUI/Ostris.
 # If your platform requires a custom wheel index, install with the matching PyTorch index URL first,
@@ -22,6 +23,10 @@ comfy-cli==1.10.3
 
 # RunPod cloud offload SDK/API wrapper.
 runpod==1.9.1
+
+# Packaging/bootstrap helpers.
+# Some Python distributions no longer bundle setuptools, but setup.py metadata commands still use it.
+setuptools>=70
 
 # Environment/config/runtime helpers.
 # Phase 0.5 keeps python-dotenv for `.env` app gating and training-engine path discovery.

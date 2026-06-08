@@ -45,6 +45,24 @@ BYTES_PER_GIB = 1024**3
 LOW_VRAM_THRESHOLD_GB = 10.0
 RTX_4070_EXPECTED_VRAM_GB = 8.0
 MIN_CACHE_FREE_GB = 100.0
+MIN_SUPPORTED_PYTHON = (3, 12)
+MAX_UNVALIDATED_PYTHON = (3, 14)
+SUPPORTED_PYTHON_LABEL = "3.12 or 3.13"
+REQUIRED_RUNTIME_MODULES = {
+    "gradio": "gradio",
+    "dotenv": "python-dotenv",
+    "pydantic": "pydantic",
+    "pydantic_settings": "pydantic-settings",
+    "yaml": "PyYAML",
+    "requests": "requests",
+    "psutil": "psutil",
+}
+OPTIONAL_RUNTIME_MODULES = {
+    "PIL": "Pillow",
+    "numpy": "numpy",
+    "cv2": "opencv-python",
+    "moviepy": "moviepy",
+}
 
 SETTINGS_DIR = ROOT / "settings"
 INSTALLER_STATE_PATH = SETTINGS_DIR / "installer_state.json"
@@ -398,7 +416,13 @@ def path_text(path: Path | None) -> str:
 def module_available(name: str) -> bool:
     """Return whether an optional module can be imported."""
 
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, AttributeError, ValueError):
+        # Tests and embedded launchers may pre-seed sys.modules with lightweight
+        # stubs that intentionally do not provide a full import spec. Treat
+        # those as unavailable for environment diagnostics instead of crashing.
+        return False
 
 
 def run_command(command: list[str], timeout: int = 30) -> subprocess.CompletedProcess[str] | None:
@@ -1496,6 +1520,62 @@ def build_repair_suggestions(detections: dict[str, list[InstallCandidate]], repo
     """Build prioritized, specific recovery actions for installer output."""
 
     suggestions: list[RepairSuggestion] = []
+
+    if sys.version_info[:2] < MIN_SUPPORTED_PYTHON or sys.version_info[:2] >= MAX_UNVALIDATED_PYTHON:
+        suggestions.append(RepairSuggestion(
+            area="Python version",
+            severity="error",
+            symptom=(
+                f"Python {report.python_version} is outside the validated {SUPPORTED_PYTHON_LABEL} range "
+                "for the pinned AI/video dependency stack."
+            ),
+            actions=[
+                "Create a fresh virtual environment with Python 3.13 or 3.12.",
+                "Re-run `python -m pip install -r requirements.txt` inside that environment.",
+                "Use `python setup.py --python-requires` to verify the supported range before installing.",
+            ],
+            command="python setup.py --python-requires",
+        ))
+
+    missing_required = [package for module, package in REQUIRED_RUNTIME_MODULES.items() if not module_available(module)]
+    if missing_required:
+        suggestions.append(RepairSuggestion(
+            area="Python dependencies",
+            severity="error",
+            symptom="Required app modules are missing: " + ", ".join(sorted(missing_required)) + ".",
+            actions=[
+                "Activate the intended Futa-Vision virtual environment.",
+                "Install the pinned runtime requirements.",
+                "If installation fails on Python 3.14+, switch to Python 3.13 or 3.12 first.",
+            ],
+            command="python -m pip install -r requirements.txt",
+        ))
+
+    if not module_available("setuptools"):
+        suggestions.append(RepairSuggestion(
+            area="Packaging bootstrap",
+            severity="warning",
+            symptom="setuptools is not importable; setup.py can only run bootstrap-safe commands.",
+            actions=[
+                "Install requirements.txt or at least install setuptools in the active environment.",
+                "Bootstrap commands such as `python setup.py detect` and `python setup.py --version` still work without setuptools.",
+            ],
+            command="python -m pip install setuptools",
+        ))
+
+    missing_optional = [package for module, package in OPTIONAL_RUNTIME_MODULES.items() if not module_available(module)]
+    if missing_optional:
+        suggestions.append(RepairSuggestion(
+            area="Optional media dependencies",
+            severity="info",
+            symptom="Media helper modules are missing: " + ", ".join(sorted(missing_optional)) + ".",
+            actions=[
+                "Install requirements.txt before running image thumbnails, MP4 sample generation, or MoviePy previews.",
+                "The installer can still write placeholders when optional media modules are absent.",
+            ],
+            command="python -m pip install -r requirements.txt",
+        ))
+
     if not detections.get("ostris"):
         suggestions.append(RepairSuggestion(
             area="Ostris",
@@ -1572,14 +1652,6 @@ def build_repair_suggestions(detections: dict[str, list[InstallCandidate]], repo
             command="python installer.py repair --reset-cache",
         ))
 
-    if not module_available("cv2"):
-        suggestions.append(RepairSuggestion(
-            area="Sample clip test",
-            severity="info",
-            symptom="opencv-python is not importable, so MP4 sample generation may fall back to a text placeholder.",
-            actions=["Install runtime dependencies from requirements.txt."],
-            command="python -m pip install -r requirements.txt",
-        ))
     return suggestions
 
 

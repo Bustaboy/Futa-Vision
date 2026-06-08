@@ -171,7 +171,7 @@ Fast-start alternative:
 
 Backend language and runtime:
 
-- Python 3.12+.
+- Python 3.12 or 3.13 for the pinned AI/video dependency set; newer Python versions should be adopted only after wheel compatibility is validated.
 - Modular orchestrator design.
 - Simple agent loop for generation, scoring, training, extension, review, assembly, and upscale.
 

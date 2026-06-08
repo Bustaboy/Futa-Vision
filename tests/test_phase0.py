@@ -116,3 +116,62 @@ def test_markdown_report_mentions_720p_upscale_strategy() -> None:
 
 
 # Next step: add integration tests for setup.py path detection with temporary Pinokio-style folders.
+
+
+def test_setup_py_metadata_commands_work_without_setuptools() -> None:
+    """Bootstrap environments should still answer basic setup metadata queries."""
+
+    import subprocess
+    import sys
+
+    version = subprocess.run(
+        [sys.executable, "setup.py", "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    python_requires = subprocess.run(
+        [sys.executable, "setup.py", "--python-requires"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert version.stdout.strip() == "0.1.0"
+    assert python_requires.stdout.strip() == ">=3.12,<3.14"
+
+
+def test_installer_repair_suggestions_flag_unvalidated_python(monkeypatch) -> None:
+    """Installer diagnostics should catch Python versions outside the validated range."""
+
+    import installer
+
+    class FakeVersionInfo(tuple):
+        major = 3
+        minor = 14
+        micro = 0
+
+    fake_report = installer.HardwareReport(
+        gpu=installer.GPUInfo(
+            name="No NVIDIA GPU detected",
+            cuda_available=False,
+            total_vram_gb=None,
+            used_vram_gb=None,
+            free_vram_gb=None,
+            source="test",
+        ),
+        python_version="3.14.0",
+        platform="test",
+        torch_available=False,
+        cache_free_gb=200.0,
+        recommended_profile=installer.HardwareProfile.CLOUD_RECOMMENDED,
+        profile_reason="test",
+    )
+    monkeypatch.setattr(installer.sys, "version_info", FakeVersionInfo((3, 14, 0)))
+
+    suggestions = installer.build_repair_suggestions(
+        {"ostris": [], "comfyui": [], "pinokio": [], "futa_vision": []},
+        fake_report,
+    )
+
+    assert any(item.area == "Python version" and item.severity == "error" for item in suggestions)

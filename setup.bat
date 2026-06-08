@@ -12,7 +12,7 @@ echo.
 echo Welcome! This setup will prepare Futa-Vision on this PC.
 echo.
 echo What it will do:
-echo   1. Find a working Python 3 installation
+echo   1. Find a supported Python 3.12 or 3.13 installation
 echo   2. Install or refresh required Python packages
 echo   3. Run the Phase 5 installer / repair checks
 echo   4. Offer to launch the Gradio app in your browser
@@ -24,22 +24,27 @@ echo Tip: If Windows asks for network access, allow Python so Gradio can open lo
 echo.
 
 set "PYTHON_CMD="
-echo [Step 1/4] Looking for Python...
+echo [Step 1/4] Looking for Python 3.12 or 3.13...
 where py >nul 2>nul
 if %ERRORLEVEL%==0 (
-    set "PYTHON_CMD=py -3"
-) else (
-    where python >nul 2>nul
-    if %ERRORLEVEL%==0 (
-        set "PYTHON_CMD=python"
+    py -3.13 --version >nul 2>nul
+    if !ERRORLEVEL!==0 (
+        set "PYTHON_CMD=py -3.13"
+    ) else (
+        py -3.12 --version >nul 2>nul
+        if !ERRORLEVEL!==0 set "PYTHON_CMD=py -3.12"
     )
+)
+if not defined PYTHON_CMD (
+    where python >nul 2>nul
+    if !ERRORLEVEL!==0 set "PYTHON_CMD=python"
 )
 
 if not defined PYTHON_CMD (
     echo.
     echo [ERROR] Python was not found on PATH.
     echo.
-    echo Please install Python 3.12 or newer from:
+    echo Please install Python 3.12 or 3.13 from:
     echo   https://www.python.org/downloads/windows/
     echo.
     echo IMPORTANT: During installation, check "Add python.exe to PATH".
@@ -55,6 +60,16 @@ if errorlevel 1 (
     echo.
     echo [ERROR] Python was found but could not be started.
     echo Try reinstalling Python and make sure it is added to PATH.
+    echo.
+    pause
+    exit /b 1
+)
+
+!PYTHON_CMD! -c "import sys; raise SystemExit(0 if (3, 12) <= sys.version_info[:2] < (3, 14) else 1)"
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Futa-Vision dependencies are validated for Python 3.12 or 3.13 only.
+    echo Install Python 3.13 or 3.12, then run setup.bat again.
     echo.
     pause
     exit /b 1

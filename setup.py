@@ -22,6 +22,8 @@ except ImportError:  # Allows `python setup.py detect` in minimal bootstrap envi
     setup = None  # type: ignore[assignment]
 
 PROJECT_NAME = "futa-vision"
+PROJECT_VERSION = "0.1.0"
+PYTHON_REQUIRES = ">=3.12,<3.14"
 ROOT = Path(__file__).resolve().parent
 
 PINOKIO_APP_MARKERS = {
@@ -214,23 +216,56 @@ def install_runtime() -> None:
     print("Next step: run `python setup.py detect` to confirm local engines and folder layout.")
 
 
+def _run_minimal_metadata_command(argv: list[str]) -> bool:
+    """Handle common metadata queries even before setuptools is installed."""
+
+    if len(argv) < 2:
+        return False
+    command = argv[1]
+    values = {
+        "--name": PROJECT_NAME,
+        "--version": PROJECT_VERSION,
+        "--python-requires": PYTHON_REQUIRES,
+    }
+    if command in values:
+        print(values[command])
+        return True
+    return False
+
+
 if __name__ == "__main__" and setup is None:
     if len(sys.argv) >= 2 and sys.argv[1] == "detect":
         run_detection()
     elif len(sys.argv) >= 2 and sys.argv[1] == "install_runtime":
         install_runtime()
+    elif _run_minimal_metadata_command(sys.argv):
+        pass
     else:
         raise SystemExit(
             "setuptools is not installed. Supported bootstrap commands without setuptools: "
-            "`python setup.py detect` or `python setup.py install_runtime`."
+            "`python setup.py detect`, `python setup.py install_runtime`, `python setup.py --name`, "
+            "`python setup.py --version`, or `python setup.py --python-requires`."
         )
 elif setup is not None:
     setup(
         name=PROJECT_NAME,
-        version="0.1.0",
+        version=PROJECT_VERSION,
         description="Local-first Gradio skeleton for the Futa-Vision AI video director workflow.",
-        python_requires=">=3.12",
-        py_modules=["main", "hardware_check"],
+        python_requires=PYTHON_REQUIRES,
+        py_modules=[
+            "chat_parser",
+            "cloud_manager",
+            "exporter",
+            "hardware_check",
+            "installer",
+            "library",
+            "main",
+            "regeneration_engine",
+            "scoring",
+            "timeline",
+            "training_orchestrator",
+            "video_assembly",
+        ],
         packages=find_packages(exclude=("docs", "tests")),
         install_requires=[],
         extras_require={"dev": ["pytest==9.0.1"]},

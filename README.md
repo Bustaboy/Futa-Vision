@@ -13,7 +13,7 @@ The current Phase 0 implementation is a runnable Gradio-first skeleton that mirr
 
 ### How to test Phase 0
 
-1. Create and activate a Python 3.12+ virtual environment.
+1. Create and activate a Python 3.12 or 3.13 virtual environment. Python 3.14+ is not yet part of the validated dependency set for the pinned AI/video packages.
 2. Install runtime dependencies:
 
    ```bash
@@ -52,7 +52,7 @@ The current Phase 0 implementation is a runnable Gradio-first skeleton that mirr
 
 ### Developer test dependencies
 
-`pytest` is exposed through the `dev` extra in `setup.py` and pinned in `requirements.txt` for the Phase 0 smoke-test path.
+`pytest` is exposed through the `dev` extra in `setup.py` and pinned in `requirements.txt` for the Phase 0 smoke-test path. `setuptools` is also listed because some Python distributions no longer bundle it, while setup metadata commands still need it after bootstrap.
 
 ## Phase 0.5 Completed
 
