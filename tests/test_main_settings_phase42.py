@@ -72,3 +72,66 @@ def test_settings_markdown_includes_phase42_status(tmp_path: Path, monkeypatch) 
     assert "Current Phase 4.2 Settings" in markdown
     assert "4070 8GB Safe Defaults" in markdown
     assert "outputs/final_videos" in markdown
+
+
+def test_settings_hub_registers_extension_sections_and_searches(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "DEFAULT_SETTINGS_PATH", tmp_path / "settings.json")
+    main._EXTENSION_SETTINGS_SECTIONS.clear()
+
+    registration = main.register_settings_section(
+        "demo-extension",
+        "Demo Extension",
+        "Adds a custom extension control panel.",
+        controls=[{"id": "enabled", "label": "Enable demo"}],
+        impact="No VRAM impact unless enabled.",
+    )
+
+    assert registration["section_id"] == "demo-extension"
+    assert "Demo Extension" in main.extension_settings_markdown()
+    assert "8GB" in main.settings_search_markdown("8GB")
+
+
+def test_backup_import_and_reset_settings_hub(tmp_path: Path, monkeypatch) -> None:
+    settings_path = tmp_path / "settings.json"
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(main, "DEFAULT_SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(main, "SETTINGS_BACKUP_DIR", backup_dir)
+
+    summary, _ = main.save_app_settings(
+        runpod_api_key="",
+        default_cloud_mode="Auto",
+        performance_preset="Preview Fast — 720p drafts / minimal cache",
+        vram_safety=True,
+        require_adult_gate=True,
+        theme_option="Warm Premium Dark",
+        dense_mode=True,
+        show_advanced_json=True,
+        tts_enabled=True,
+        tts_voice="Soft companion",
+        tts_mood="Playful",
+        tts_speed=1.05,
+        image_style_preset="Slime physics focus",
+        growth_automation_enabled=True,
+        memory_prune_enabled=True,
+        memory_prune_after_days=14,
+        extension_settings_enabled=True,
+        autosave_minutes=3,
+    )
+    assert "Settings saved" in summary
+
+    backup_summary, backup_path = main.export_settings_bundle(True, True, True)
+    assert "Backup exported" in backup_summary
+    assert backup_path is not None
+    assert Path(backup_path).exists()
+
+    imported = json.dumps({"appearance": {"theme": "Monochrome"}, "memory": {"prune_after_days": 45}})
+    import_summary, imported_json = main.import_settings_from_json(imported, True)
+    imported_payload = json.loads(imported_json)
+    assert "Settings imported" in import_summary
+    assert imported_payload["appearance"]["theme"] == "Monochrome"
+    assert imported_payload["memory"]["prune_after_days"] == 45
+
+    reset_summary, reset_json = main.reset_settings_to_defaults(True)
+    reset_payload = json.loads(reset_json)
+    assert "Settings reset" in reset_summary
+    assert reset_payload["appearance"]["theme"] == "Warm Premium Dark"
