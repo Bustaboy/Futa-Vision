@@ -13,8 +13,10 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
+import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,13 +40,34 @@ from hardware_check import report_to_markdown
 from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, score_partner_candidate, weighted_score
 
 APP_TITLE = "Futa-Vision Director"
-SETTINGS_SCHEMA_VERSION = "phase4.2.settings.v1"
+SETTINGS_SCHEMA_VERSION = "milestone3.task5d.settings.v1"
 DEFAULT_SETTINGS_PATH = Path("settings/futa_vision_settings.json")
 INSTALLER_MANIFEST_PATH = Path("settings/installer_manifest.json")
 INSTALLER_STATE_PATH = Path("settings/installer_state.json")
 INSTALLER_LOG_PATH = Path("logs/installer.log")
+SETTINGS_BACKUP_DIR = Path("settings/backups")
 ADULT_CONFIRMATION_ENV = "FUTA_VISION_REQUIRE_ADULT_CONFIRMATION"
 LOGGER = logging.getLogger("futa_vision_app")
+
+SETTINGS_HUB_CSS = """
+.gradio-container {
+    background: radial-gradient(circle at top left, #2f2118 0, #15110f 34%, #0d0b0a 100%);
+}
+#settings-hub-card, .settings-hub-card {
+    border: 1px solid rgba(245, 180, 105, 0.22);
+    border-radius: 18px;
+    background: linear-gradient(135deg, rgba(43, 31, 24, 0.92), rgba(19, 16, 15, 0.94));
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+    padding: 0.9rem;
+}
+.settings-hub-kicker {
+    color: #f4b46f;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    font-weight: 800;
+}
+"""
 
 
 @dataclass(slots=True)
@@ -588,12 +611,125 @@ def app_polish_status() -> str:
     )
 
 
+
+def _deep_merge_settings(defaults: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Merge user settings over defaults while preserving newly added sections."""
+
+    merged = json.loads(json.dumps(defaults))
+    for key, value in payload.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_settings(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+@dataclass(slots=True)
+class SettingsSectionRegistration:
+    """Extension-provided Settings Hub section metadata."""
+
+    section_id: str
+    title: str
+    summary: str
+    controls: list[dict[str, Any]] = field(default_factory=list)
+    impact: str = "Extension-managed setting. Review the extension documentation before enabling automation."
+
+
+_EXTENSION_SETTINGS_SECTIONS: dict[str, SettingsSectionRegistration] = {}
+
+
+def register_settings_section(
+    section_id: str,
+    title: str,
+    summary: str,
+    controls: list[dict[str, Any]] | None = None,
+    impact: str = "",
+) -> dict[str, Any]:
+    """Register an extension-owned section for the Settings & Control Hub.
+
+    Task 5C extension loaders can call this lightweight API without importing
+    Gradio. The Hub renders the registrations as searchable Markdown until an
+    extension supplies richer UI components in a future milestone.
+    """
+
+    normalized_id = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in section_id.strip().lower())
+    if not normalized_id:
+        raise ValueError("section_id is required")
+    registration = SettingsSectionRegistration(
+        section_id=normalized_id,
+        title=title.strip() or normalized_id.replace("_", " ").title(),
+        summary=summary.strip() or "No extension summary provided.",
+        controls=controls or [],
+        impact=impact.strip() or "Extension-managed setting. Keep disabled if you are unsure of its performance or privacy impact.",
+    )
+    _EXTENSION_SETTINGS_SECTIONS[normalized_id] = registration
+    return asdict(registration)
+
+
+def registered_settings_sections() -> list[dict[str, Any]]:
+    """Return extension Settings Hub registrations sorted for stable rendering."""
+
+    return [asdict(_EXTENSION_SETTINGS_SECTIONS[key]) for key in sorted(_EXTENSION_SETTINGS_SECTIONS)]
+
+
 def default_app_settings() -> dict[str, Any]:
-    """Return persisted Settings-tab defaults for local-first use."""
+    """Return Settings & Control Hub defaults for local-first use."""
 
     return {
         "schema_version": SETTINGS_SCHEMA_VERSION,
         "updated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "general": {
+            "startup_tab": "Welcome",
+            "autosave_minutes": 5,
+            "confirm_destructive_actions": True,
+            "local_first_mode": True,
+        },
+        "appearance": {
+            "theme": "Warm Premium Dark",
+            "dense_mode": False,
+            "show_advanced_json": True,
+            "status_badges": True,
+            "reduced_motion": False,
+        },
+        "tts_voice": {
+            "enabled": False,
+            "voice": "Warm narrator",
+            "mood": "Intimate calm",
+            "speed": 1.0,
+            "sample_text": "This is a local preview voice. Adjust mood and speed before generating scene narration.",
+        },
+        "image_generation": {
+            "preset": "RTX 4070 8GB Safe — 720p generate + 1080p export",
+            "style_preset": "Glossy material study",
+            "negative_prompt_strength": "Balanced",
+            "seed_lock": True,
+            "preview_enabled": True,
+        },
+        "growth_learning": {
+            "automation_enabled": False,
+            "review_threshold": DEFAULT_THRESHOLD,
+            "auto_tag_successful_outputs": True,
+            "learn_from_rejections": True,
+            "require_manual_approval_before_training": True,
+        },
+        "memory": {
+            "prune_enabled": True,
+            "prune_after_days": 30,
+            "keep_approved_assets": True,
+            "backup_before_prune": True,
+            "max_cache_gb": 80,
+        },
+        "extensibility": {
+            "extension_settings_enabled": True,
+            "allow_extension_control_sections": True,
+            "require_extension_privacy_notes": True,
+        },
+        "backup": {
+            "last_backup_path": None,
+            "include_characters": True,
+            "include_growth_data": True,
+            "include_full_settings": True,
+        },
         "cloud": {
             "runpod_api_key_present": bool(os.getenv("RUNPOD_API_KEY")),
             "default_mode": hardware_check.DEFAULT_CLOUD_MODE,
@@ -605,6 +741,9 @@ def default_app_settings() -> dict[str, Any]:
             "export_resolution": "1920x1080",
             "vram_safety": True,
             "oom_fallback": "Retry 960x540, then offer RunPod with explicit confirmation.",
+            "batch_size": 1,
+            "cache_latents_to_disk": True,
+            "impact_note": "Best 8GB path: short 720p clips, batch size 1, disk cache, final upscale after timeline approval.",
         },
         "safety": {
             "adult_gate_required": adult_confirmation_required(),
@@ -612,7 +751,7 @@ def default_app_settings() -> dict[str, Any]:
             "cloud_privacy_notice_finalized": True,
         },
         "ui": {
-            "theme": "Soft",
+            "theme": "Warm Premium Dark",
             "dense_mode": False,
             "show_advanced_json": True,
             "status_badges": True,
@@ -621,7 +760,7 @@ def default_app_settings() -> dict[str, Any]:
 
 
 def load_app_settings(settings_path: Path | None = None) -> dict[str, Any]:
-    """Load Settings-tab JSON without failing first launch."""
+    """Load Settings Hub JSON without failing first launch."""
 
     target_path = settings_path or DEFAULT_SETTINGS_PATH
     defaults = default_app_settings()
@@ -631,12 +770,30 @@ def load_app_settings(settings_path: Path | None = None) -> dict[str, Any]:
         payload = json.loads(target_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return defaults | {"warnings": [f"Ignoring corrupt settings file: {target_path}"]}
-    merged = defaults
-    for section in ("cloud", "performance", "safety", "ui"):
-        if isinstance(payload.get(section), dict):
-            merged[section].update(payload[section])
+    if not isinstance(payload, dict):
+        return defaults | {"warnings": [f"Ignoring non-object settings file: {target_path}"]}
+    merged = _deep_merge_settings(defaults, payload)
+    if isinstance(payload.get("ui"), dict):
+        merged["appearance"].update(payload["ui"])
+    if isinstance(payload.get("appearance"), dict):
+        merged["ui"].update({
+            "theme": payload["appearance"].get("theme", merged["ui"].get("theme")),
+            "dense_mode": payload["appearance"].get("dense_mode", merged["ui"].get("dense_mode")),
+            "show_advanced_json": payload["appearance"].get("show_advanced_json", merged["ui"].get("show_advanced_json")),
+            "status_badges": payload["appearance"].get("status_badges", merged["ui"].get("status_badges")),
+        })
     merged["updated_at"] = payload.get("updated_at", merged["updated_at"])
+    merged["schema_version"] = SETTINGS_SCHEMA_VERSION
     return merged
+
+
+def _redacted_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Return a display-safe settings payload."""
+
+    safe_payload = json.loads(json.dumps(settings))
+    if safe_payload.get("cloud", {}).get("runpod_api_key"):
+        safe_payload["cloud"]["runpod_api_key"] = "***redacted***"
+    return safe_payload
 
 
 def save_app_settings(
@@ -648,13 +805,32 @@ def save_app_settings(
     theme_option: str,
     dense_mode: bool,
     show_advanced_json: bool,
+    tts_enabled: bool = False,
+    tts_voice: str = "Warm narrator",
+    tts_mood: str = "Intimate calm",
+    tts_speed: float = 1.0,
+    image_style_preset: str = "Glossy material study",
+    growth_automation_enabled: bool = False,
+    memory_prune_enabled: bool = True,
+    memory_prune_after_days: int | float = 30,
+    extension_settings_enabled: bool = True,
+    autosave_minutes: int | float = 5,
 ) -> tuple[str, str]:
-    """Persist final Phase 4.2 Settings-tab preferences locally."""
+    """Persist Settings & Control Hub preferences locally."""
 
     selected_cloud_mode = default_cloud_mode if default_cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto"
     normalized_key = (runpod_api_key or "").strip()
+    autosave_value = max(1, int(autosave_minutes or 5))
+    prune_days = max(1, int(memory_prune_after_days or 30))
     current = load_app_settings()
+    current["schema_version"] = SETTINGS_SCHEMA_VERSION
     current["updated_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+    current["general"] = {
+        "startup_tab": current.get("general", {}).get("startup_tab", "Welcome"),
+        "autosave_minutes": autosave_value,
+        "confirm_destructive_actions": True,
+        "local_first_mode": True,
+    }
     current["cloud"] = {
         "runpod_api_key_present": bool(normalized_key) or bool(os.getenv("RUNPOD_API_KEY")),
         "runpod_api_key_hint": "stored in local settings" if normalized_key else "use RUNPOD_API_KEY env var or paste per session",
@@ -667,6 +843,9 @@ def save_app_settings(
         "export_resolution": "1920x1080" if "1080" in performance_preset or "720" in performance_preset else "2560x1440+ cloud recommended",
         "vram_safety": bool(vram_safety),
         "oom_fallback": "Retry 960x540 locally, then ask for RunPod upload confirmation.",
+        "batch_size": 1 if bool(vram_safety) else 2,
+        "cache_latents_to_disk": bool(vram_safety),
+        "impact_note": performance_impact_markdown(performance_preset, bool(vram_safety), bool(memory_prune_enabled)),
     }
     current["safety"] = {
         "adult_gate_required": bool(require_adult_gate),
@@ -674,29 +853,69 @@ def save_app_settings(
         "age_gate_finalized": True,
         "cloud_privacy_notice_finalized": True,
     }
+    current["appearance"] = {
+        "theme": theme_option,
+        "dense_mode": bool(dense_mode),
+        "show_advanced_json": bool(show_advanced_json),
+        "status_badges": True,
+        "reduced_motion": current.get("appearance", {}).get("reduced_motion", False),
+    }
     current["ui"] = {
         "theme": theme_option,
         "dense_mode": bool(dense_mode),
         "show_advanced_json": bool(show_advanced_json),
         "status_badges": True,
     }
+    current["tts_voice"] = {
+        "enabled": bool(tts_enabled),
+        "voice": tts_voice,
+        "mood": tts_mood,
+        "speed": float(tts_speed or 1.0),
+        "sample_text": current.get("tts_voice", {}).get("sample_text", default_app_settings()["tts_voice"]["sample_text"]),
+    }
+    current["image_generation"] = {
+        "preset": performance_preset,
+        "style_preset": image_style_preset,
+        "negative_prompt_strength": current.get("image_generation", {}).get("negative_prompt_strength", "Balanced"),
+        "seed_lock": True,
+        "preview_enabled": True,
+    }
+    current["growth_learning"] = {
+        "automation_enabled": bool(growth_automation_enabled),
+        "review_threshold": DEFAULT_THRESHOLD,
+        "auto_tag_successful_outputs": True,
+        "learn_from_rejections": True,
+        "require_manual_approval_before_training": True,
+    }
+    current["memory"] = {
+        "prune_enabled": bool(memory_prune_enabled),
+        "prune_after_days": prune_days,
+        "keep_approved_assets": True,
+        "backup_before_prune": True,
+        "max_cache_gb": current.get("memory", {}).get("max_cache_gb", 80),
+    }
+    current["extensibility"] = {
+        "extension_settings_enabled": bool(extension_settings_enabled),
+        "allow_extension_control_sections": True,
+        "require_extension_privacy_notes": True,
+        "registered_sections": registered_settings_sections(),
+    }
     if normalized_key:
         current["cloud"]["runpod_api_key"] = normalized_key
     DEFAULT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    safe_payload = json.loads(json.dumps(current))
-    if safe_payload.get("cloud", {}).get("runpod_api_key"):
-        safe_payload["cloud"]["runpod_api_key"] = "***redacted***"
     DEFAULT_SETTINGS_PATH.write_text(json.dumps(current, indent=2, sort_keys=True), encoding="utf-8")
     summary = (
         "## ✅ Settings saved\n"
         f"- Cloud default: `{selected_cloud_mode}`\n"
         f"- Performance preset: `{performance_preset}`\n"
-        f"- Adult gate required: `{bool(require_adult_gate)}`\n"
+        f"- 8GB VRAM safety: `{bool(vram_safety)}` — {current['performance']['generation_resolution']} local generation, batch size {current['performance']['batch_size']}.\n"
+        f"- TTS mood: `{tts_mood}` with voice `{tts_voice}`\n"
+        f"- Growth automation: `{bool(growth_automation_enabled)}` (manual training approval remains required).\n"
+        f"- Memory pruning: `{bool(memory_prune_enabled)}` after `{prune_days}` days with backup-first policy.\n"
         f"- Theme: `{theme_option}`\n"
         "- Cloud uploads still require explicit per-job confirmation."
     )
-    return summary, json.dumps(safe_payload, indent=2, sort_keys=True)
-
+    return summary, json.dumps(_redacted_settings(current), indent=2, sort_keys=True)
 
 
 
@@ -1117,22 +1336,206 @@ def export_diagnostics_from_ui() -> str:
     return f"✅ Diagnostics exported: `{output}`"
 
 
+
+def settings_search_markdown(query: str = "", section: str = "All") -> str:
+    """Render searchable Settings Hub navigation with explanations and 8GB impact notes."""
+
+    settings = load_app_settings()
+    normalized_query = (query or "").strip().lower()
+    selected_section = section or "All"
+    sections = [
+        ("General", "Startup, autosave, local-first operation, destructive-action confirmations.", "Lightweight metadata only; no meaningful VRAM impact."),
+        ("Appearance", "Warm premium dark theme, density, advanced JSON visibility, reduced motion.", "UI-only. Dense mode reduces scrolling but does not change generation memory."),
+        ("TTS & Voice", "Narration voice, mood, speaking rate, and sample preview for future audio workflows.", "Keep local preview clips short on 8GB systems; TTS is CPU/lightweight unless routed to a heavy local voice model."),
+        ("Image Generation", "Preset, style defaults, seed lock, prompt-safety defaults, and preview behavior.", "Use 720p local generation, batch size 1, and final upscale after approval for RTX 4070 8GB."),
+        ("Growth & Self-Learning", "Review thresholds, auto-tagging, rejection learning, and training approval gates.", "Automation can create more cache/training jobs; manual approval prevents runaway 8GB workloads."),
+        ("Memory", "Pruning, cache budget, backup-before-prune, and protected approved assets.", "Pruning stale cache keeps disk available for latent caching and timeline previews."),
+        ("Extensibility", "Extension-provided settings sections registered through Task 5C hooks.", "Extension impact varies; require privacy notes and performance explanations before enabling automation."),
+        ("Performance & 8GB", "VRAM safety, OOM fallback, batch size, disk cache, cloud handoff policy.", settings["performance"].get("impact_note", "8GB safe defaults are active.")),
+        ("Backup / Import / Reset", "Export characters, growth data, settings, diagnostics; import settings JSON; reset defaults with confirmation.", "Backups are disk-heavy but protect assets before pruning or reset."),
+    ]
+    rows: list[str] = []
+    for title, summary, impact in sections:
+        haystack = f"{title} {summary} {impact}".lower()
+        if selected_section != "All" and selected_section != title:
+            continue
+        if normalized_query and normalized_query not in haystack:
+            continue
+        rows.append(f"### {title}\n{summary}\n\n**8GB / performance impact:** {impact}")
+    if not rows:
+        rows.append("No settings matched the current search. Try `voice`, `8GB`, `backup`, `memory`, or `extension`.")
+    return "\n\n".join(rows)
+
+
+def performance_impact_markdown(performance_preset: str, vram_safety: bool, memory_prune_enabled: bool) -> str:
+    """Explain the practical impact of a performance preset for 8GB operators."""
+
+    if "Higher Quality" in (performance_preset or ""):
+        base = "Higher quality keeps local source generation conservative but expects cloud/offload or slower final upscale for 1440p+."
+    elif "Preview Fast" in (performance_preset or ""):
+        base = "Preview Fast favors short 720p drafts and minimal cache pressure so timeline iteration stays responsive."
+    else:
+        base = "RTX 4070 8GB Safe is the recommended default: 720p local generation, batch size 1, disk cache, and 1080p export/upscale."
+    safety = "VRAM safety is enabled, so OOM fallback retries 960x540 before offering RunPod." if vram_safety else "VRAM safety is disabled; expect more OOM risk on 8GB GPUs."
+    pruning = "Memory pruning is enabled to protect latent cache headroom." if memory_prune_enabled else "Memory pruning is disabled; watch disk free space before long extensions."
+    return f"{base} {safety} {pruning}"
+
+
+def voice_preview_markdown(voice: str, mood: str, speed: float) -> str:
+    """Return a real-time TTS preview card without requiring a heavy voice backend."""
+
+    speed_value = float(speed or 1.0)
+    pacing = "slow and intimate" if speed_value < 0.95 else "bright and quick" if speed_value > 1.08 else "natural"
+    return (
+        "### TTS Voice Preview\n"
+        f"**Voice:** {voice or 'Warm narrator'}  \n"
+        f"**Mood:** {mood or 'Intimate calm'}  \n"
+        f"**Speed:** {speed_value:.2f}x ({pacing})\n\n"
+        "Sample line: _This is a local preview voice. Adjust mood and speed before generating narration._\n\n"
+        "Impact: preview metadata is instant; future local neural voice rendering should stay short on 8GB systems unless offloaded."
+    )
+
+
+def image_preset_preview_markdown(performance_preset: str, style_preset: str, vram_safety: bool) -> str:
+    """Return an instant image-preset preview card for Settings."""
+
+    resolution = "1280x720" if "720" in (performance_preset or "") else "1280x720 source + high-resolution final upscale"
+    return (
+        "### Image Preset Preview\n"
+        f"- **Preset:** {performance_preset}\n"
+        f"- **Style:** {style_preset}\n"
+        f"- **Local render target:** `{resolution}`\n"
+        f"- **Seed lock:** enabled for repeatable character comparisons.\n"
+        f"- **VRAM safety:** `{bool(vram_safety)}` — batch size 1 and OOM retry guidance for 8GB GPUs."
+    )
+
+
+def extension_settings_markdown() -> str:
+    """Render extension-registered settings sections."""
+
+    registrations = registered_settings_sections()
+    if not registrations:
+        return (
+            "### Extension Settings\n"
+            "No extension settings are registered yet. Task 5C extensions can call "
+            "`register_settings_section(section_id, title, summary, controls, impact)` to appear here."
+        )
+    chunks = ["### Extension Settings"]
+    for registration in registrations:
+        controls = registration.get("controls") or []
+        control_text = ", ".join(str(control.get("label", control.get("id", "control"))) for control in controls) or "No controls declared"
+        chunks.append(
+            f"#### {registration['title']}\n"
+            f"{registration['summary']}\n\n"
+            f"Controls: {control_text}\n\n"
+            f"Impact: {registration['impact']}"
+        )
+    return "\n\n".join(chunks)
+
+
 def settings_markdown() -> str:
     """Render current app settings plus Phase 5 installer status for the Settings tab."""
 
     settings = load_app_settings()
     return (
-        "## Current Phase 4.2 Settings\n"
-        f"{app_polish_status()}\n\n"
+        "## Current Phase 4.2 Settings / Milestone 3 Task 5D Control Hub\n"
+        f"{app_polish_status()} {status_badge('Settings Hub 5D Complete', 'success')}\n\n"
+        "### Active Profile\n"
         f"- Cloud default mode: `{settings['cloud']['default_mode']}`\n"
         f"- RunPod key present: `{settings['cloud']['runpod_api_key_present']}`\n"
         f"- Performance: `{settings['performance']['preset']}`\n"
         f"- VRAM safety: `{settings['performance']['vram_safety']}`\n"
+        f"- TTS mood: `{settings['tts_voice']['mood']}` (enabled: `{settings['tts_voice']['enabled']}`)\n"
+        f"- Image style preset: `{settings['image_generation']['style_preset']}`\n"
+        f"- Growth automation: `{settings['growth_learning']['automation_enabled']}`; manual training approval: `{settings['growth_learning']['require_manual_approval_before_training']}`\n"
+        f"- Memory pruning: `{settings['memory']['prune_enabled']}` after `{settings['memory']['prune_after_days']}` days\n"
+        f"- Extension settings enabled: `{settings['extensibility']['extension_settings_enabled']}`\n"
         f"- Adult gate required: `{settings['safety']['adult_gate_required']}`\n"
-        f"- UI theme: `{settings['ui']['theme']}`\n"
+        f"- UI theme: `{settings['appearance']['theme']}`\n"
         "- Export path: `outputs/final_videos` with MP4 sidecar metadata.\n\n"
+        "### 8GB Impact Summary\n"
+        f"{settings['performance'].get('impact_note', performance_impact_markdown(settings['performance']['preset'], settings['performance']['vram_safety'], settings['memory']['prune_enabled']))}\n\n"
         f"{installer_status_markdown()}"
     )
+
+
+def export_settings_bundle(include_characters: bool, include_growth_data: bool, include_full_settings: bool) -> tuple[str, str | None]:
+    """Create a lightweight zip backup for settings, character metadata, and growth data."""
+
+    SETTINGS_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    archive_path = SETTINGS_BACKUP_DIR / f"futa_vision_control_hub_backup_{timestamp}.zip"
+    manifest = {
+        "schema_version": "milestone3.task5d.backup.v1",
+        "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "include_characters": bool(include_characters),
+        "include_growth_data": bool(include_growth_data),
+        "include_full_settings": bool(include_full_settings),
+        "entries": [],
+    }
+    candidates: list[Path] = []
+    if include_full_settings:
+        candidates.extend([DEFAULT_SETTINGS_PATH, INSTALLER_MANIFEST_PATH, INSTALLER_STATE_PATH])
+    if include_characters:
+        candidates.extend(Path("library").glob("**/*.json"))
+        candidates.extend(Path("library").glob("**/*.sqlite*"))
+        candidates.extend(Path("library").glob("**/*.db"))
+    if include_growth_data:
+        candidates.extend(Path("outputs").glob("**/*.sidecar.json"))
+        candidates.extend(Path("outputs").glob("**/*metadata*.json"))
+        candidates.extend(Path("logs").glob("*.json"))
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for candidate in sorted(set(candidates)):
+            if candidate.exists() and candidate.is_file():
+                archive.write(candidate, candidate.as_posix())
+                manifest["entries"].append(candidate.as_posix())
+        archive.writestr("backup_manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
+    current = load_app_settings()
+    current.setdefault("backup", {})["last_backup_path"] = archive_path.as_posix()
+    DEFAULT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DEFAULT_SETTINGS_PATH.write_text(json.dumps(current, indent=2, sort_keys=True), encoding="utf-8")
+    return (
+        "## ✅ Backup exported\n"
+        f"Created `{archive_path}` with {len(manifest['entries'])} project files plus `backup_manifest.json`. "
+        "Large generated videos are intentionally excluded to keep backups fast.",
+        archive_path.as_posix(),
+    )
+
+
+def import_settings_from_json(settings_json: str, confirm_import: bool) -> tuple[str, str]:
+    """Import full settings JSON after explicit confirmation."""
+
+    if not confirm_import:
+        return "## 🔒 Import not applied\nCheck the confirmation box before replacing local Settings Hub JSON.", json.dumps(_redacted_settings(load_app_settings()), indent=2, sort_keys=True)
+    try:
+        payload = json.loads(settings_json or "{}")
+    except json.JSONDecodeError as exc:
+        return f"## ❌ Import failed\nInvalid JSON: {exc}", json.dumps(_redacted_settings(load_app_settings()), indent=2, sort_keys=True)
+    if not isinstance(payload, dict):
+        return "## ❌ Import failed\nSettings import must be a JSON object.", json.dumps(_redacted_settings(load_app_settings()), indent=2, sort_keys=True)
+    imported = _deep_merge_settings(default_app_settings(), payload)
+    imported["schema_version"] = SETTINGS_SCHEMA_VERSION
+    imported["updated_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+    DEFAULT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if DEFAULT_SETTINGS_PATH.exists():
+        SETTINGS_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(DEFAULT_SETTINGS_PATH, SETTINGS_BACKUP_DIR / f"pre_import_settings_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json")
+    DEFAULT_SETTINGS_PATH.write_text(json.dumps(imported, indent=2, sort_keys=True), encoding="utf-8")
+    return "## ✅ Settings imported\nExisting settings were backed up before import.", json.dumps(_redacted_settings(imported), indent=2, sort_keys=True)
+
+
+def reset_settings_to_defaults(confirm_reset: bool) -> tuple[str, str]:
+    """Reset Settings Hub JSON after explicit confirmation."""
+
+    if not confirm_reset:
+        return "## 🔒 Reset not applied\nCheck the confirmation box before resetting settings.", json.dumps(_redacted_settings(load_app_settings()), indent=2, sort_keys=True)
+    SETTINGS_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    if DEFAULT_SETTINGS_PATH.exists():
+        shutil.copy2(DEFAULT_SETTINGS_PATH, SETTINGS_BACKUP_DIR / f"pre_reset_settings_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json")
+    defaults = default_app_settings()
+    DEFAULT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DEFAULT_SETTINGS_PATH.write_text(json.dumps(defaults, indent=2, sort_keys=True), encoding="utf-8")
+    return "## ✅ Settings reset to defaults\nA pre-reset copy was saved when an existing settings file was present.", json.dumps(_redacted_settings(defaults), indent=2, sort_keys=True)
 
 
 def run_final_export(
@@ -1200,7 +1603,7 @@ def build_ui() -> gr.Blocks:
     initial_interactive = initial_confirmed
     initial_tab = post_install_start_tab(initial_interactive)
 
-    with gr.Blocks(title=APP_TITLE) as demo:
+    with gr.Blocks(title=APP_TITLE, css=SETTINGS_HUB_CSS) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
             "Phase 5: guided installer, VRAM-safe setup, settings polish, and beginner-friendly repair tools."
@@ -1265,13 +1668,85 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(phase0_test_markdown())
 
             with gr.Tab("⚙️ Settings", id="Settings"):
+                gr.HTML("<div class='settings-hub-card'><div class='settings-hub-kicker'>Milestone 3 · Task 5D</div><h2>Settings & Control Hub</h2><p>Unified local-first controls with warm premium dark polish, search, previews, extension hooks, and 8GB guidance.</p></div>")
                 gr.Markdown(
-                    "Finalize installer, cloud, performance, safety, and theme preferences for Phase 5. "
-                    "Settings are stored locally in `settings/futa_vision_settings.json`; cloud uploads still require per-job approval."
+                    "## Settings & Control Hub\n"
+                    "A unified local-first control center for installer health, performance, TTS, image presets, growth automation, memory, extensions, and backups. "
+                    "Use search or the section navigator; every 8GB-sensitive control includes impact guidance."
                 )
                 settings_status = gr.Markdown(settings_markdown())
                 settings_defaults = load_app_settings()
-                with gr.Accordion("Cloud preferences", open=True):
+                with gr.Row():
+                    settings_search = gr.Textbox(label="Search settings", placeholder="Try: 8GB, voice, backup, memory, extension", scale=2)
+                    settings_section = gr.Dropdown(
+                        ["All", "General", "Appearance", "TTS & Voice", "Image Generation", "Growth & Self-Learning", "Memory", "Extensibility", "Performance & 8GB", "Backup / Import / Reset"],
+                        value="All",
+                        label="Jump to section",
+                        scale=1,
+                    )
+                settings_navigation = gr.Markdown(settings_search_markdown())
+
+                with gr.Accordion("General", open=True):
+                    gr.Markdown("Local-first defaults, autosave cadence, startup behavior, and destructive-action confirmations.")
+                    settings_autosave_minutes = gr.Slider(1, 30, value=int(settings_defaults["general"].get("autosave_minutes", 5)), step=1, label="Autosave interval (minutes)")
+                    gr.Markdown("Impact: autosave writes small JSON state only and has no VRAM cost.")
+
+                with gr.Accordion("Appearance", open=True):
+                    settings_theme = gr.Radio(
+                        ["Warm Premium Dark", "Soft", "Default", "Monochrome"],
+                        value=settings_defaults["appearance"].get("theme", settings_defaults["ui"].get("theme", "Warm Premium Dark")),
+                        label="Theme preference",
+                    )
+                    settings_dense_mode = gr.Checkbox(label="Dense mode (compact controls)", value=bool(settings_defaults["appearance"].get("dense_mode", False)))
+                    settings_show_json = gr.Checkbox(label="Show advanced JSON manifests by default", value=bool(settings_defaults["appearance"].get("show_advanced_json", True)))
+                    gr.Markdown("Impact: UI-only. Dense mode improves keyboard/tabbing speed in long forms but does not change generation memory.")
+
+                with gr.Accordion("TTS & Voice", open=True):
+                    settings_tts_enabled = gr.Checkbox(label="Enable TTS metadata for narration workflows", value=bool(settings_defaults["tts_voice"].get("enabled", False)))
+                    with gr.Row():
+                        settings_tts_voice = gr.Dropdown(["Warm narrator", "Soft companion", "Cinematic whisper", "Neutral director"], value=settings_defaults["tts_voice"].get("voice", "Warm narrator"), label="Voice")
+                        settings_tts_mood = gr.Dropdown(["Intimate calm", "Playful", "Cinematic tension", "Instructional"], value=settings_defaults["tts_voice"].get("mood", "Intimate calm"), label="Mood")
+                        settings_tts_speed = gr.Slider(0.75, 1.25, value=float(settings_defaults["tts_voice"].get("speed", 1.0)), step=0.05, label="Speed")
+                    settings_voice_preview = gr.Markdown(voice_preview_markdown(settings_defaults["tts_voice"].get("voice", "Warm narrator"), settings_defaults["tts_voice"].get("mood", "Intimate calm"), settings_defaults["tts_voice"].get("speed", 1.0)))
+
+                with gr.Accordion("Image Generation", open=True):
+                    settings_performance_preset = gr.Radio(
+                        [
+                            "RTX 4070 8GB Safe — 720p generate + 1080p export",
+                            "Higher Quality — 720p source + 1440p/Cloud upscale",
+                            "Preview Fast — 720p drafts / minimal cache",
+                        ],
+                        value=settings_defaults["performance"].get("preset", "RTX 4070 8GB Safe — 720p generate + 1080p export"),
+                        label="Image / video preset",
+                    )
+                    settings_image_style = gr.Dropdown(
+                        ["Glossy material study", "Slime physics focus", "Anatomy validation", "Cinematic warm dark", "Fast draft"],
+                        value=settings_defaults["image_generation"].get("style_preset", "Glossy material study"),
+                        label="Image style preset",
+                    )
+                    settings_vram_safety = gr.Checkbox(
+                        label="Enable VRAM safety (4070 8GB: 720p local, batch size 1, 960x540 OOM retry, cloud fallback prompt)",
+                        value=bool(settings_defaults["performance"].get("vram_safety", True)),
+                    )
+                    settings_image_preview = gr.Markdown(image_preset_preview_markdown(settings_defaults["performance"].get("preset", "RTX 4070 8GB Safe — 720p generate + 1080p export"), settings_defaults["image_generation"].get("style_preset", "Glossy material study"), bool(settings_defaults["performance"].get("vram_safety", True))))
+
+                with gr.Accordion("Growth & Self-Learning", open=True):
+                    settings_growth_enabled = gr.Checkbox(label="Enable growth automation suggestions (manual training approval still required)", value=bool(settings_defaults["growth_learning"].get("automation_enabled", False)))
+                    gr.Markdown(
+                        f"Review gate remains **{DEFAULT_THRESHOLD:.0f}+** before approved training/registration. "
+                        "Automation may tag successful outputs and learn from rejections, but it cannot launch training without human approval."
+                    )
+
+                with gr.Accordion("Memory", open=True):
+                    settings_memory_prune = gr.Checkbox(label="Enable memory/cache pruning", value=bool(settings_defaults["memory"].get("prune_enabled", True)))
+                    settings_memory_prune_days = gr.Slider(7, 180, value=int(settings_defaults["memory"].get("prune_after_days", 30)), step=1, label="Prune unapproved cache after days")
+                    gr.Markdown("Approved characters, LoRAs, timelines, final videos, and backup archives are protected. Backup-before-prune remains enabled.")
+
+                with gr.Accordion("Extensibility", open=True):
+                    settings_extensions_enabled = gr.Checkbox(label="Allow extensions to register Settings Hub sections", value=bool(settings_defaults["extensibility"].get("extension_settings_enabled", True)))
+                    extension_settings_output = gr.Markdown(extension_settings_markdown())
+
+                with gr.Accordion("Cloud preferences", open=False):
                     settings_runpod_key = gr.Textbox(
                         label="RunPod API key (local settings / optional)",
                         type="password",
@@ -1282,21 +1757,9 @@ def build_ui() -> gr.Blocks:
                         value=settings_defaults["cloud"].get("default_mode", hardware_check.DEFAULT_CLOUD_MODE),
                         label="Default execution mode",
                     )
-                with gr.Accordion("Performance presets", open=True):
-                    settings_performance_preset = gr.Radio(
-                        [
-                            "RTX 4070 8GB Safe — 720p generate + 1080p export",
-                            "Higher Quality — 720p source + 1440p/Cloud upscale",
-                            "Preview Fast — 720p drafts / minimal cache",
-                        ],
-                        value=settings_defaults["performance"].get("preset", "RTX 4070 8GB Safe — 720p generate + 1080p export"),
-                        label="Performance preset",
-                    )
-                    settings_vram_safety = gr.Checkbox(
-                        label="Enable VRAM safety (4070 8GB: 720p local, 960x540 OOM retry, cloud fallback prompt)",
-                        value=bool(settings_defaults["performance"].get("vram_safety", True)),
-                    )
-                with gr.Accordion("NSFW disclaimer / age gate finalization", open=True):
+                    gr.Markdown("Privacy: cloud uploads require explicit per-job approval even when a default cloud mode is selected.")
+
+                with gr.Accordion("NSFW disclaimer / age gate finalization", open=False):
                     settings_adult_gate = gr.Checkbox(
                         label="Require adult confirmation gate every local session",
                         value=bool(settings_defaults["safety"].get("adult_gate_required", adult_confirmation_required())),
@@ -1305,22 +1768,35 @@ def build_ui() -> gr.Blocks:
                         "By using this app, the operator confirms they are an adult and will create only lawful, consensual adult content. "
                         "Private prompts, references, LoRAs, and outputs remain local unless an explicit cloud-upload checkbox is enabled for that job."
                     )
-                with gr.Accordion("General UI / theme options", open=False):
-                    settings_theme = gr.Radio(["Soft", "Default", "Monochrome"], value=settings_defaults["ui"].get("theme", "Soft"), label="Theme preference")
-                    settings_dense_mode = gr.Checkbox(label="Dense mode (compact controls)", value=bool(settings_defaults["ui"].get("dense_mode", False)))
-                    settings_show_json = gr.Checkbox(label="Show advanced JSON manifests by default", value=bool(settings_defaults["ui"].get("show_advanced_json", True)))
+
                 with gr.Row():
                     save_settings_button = gr.Button("Save Settings", variant="primary")
-                    refresh_settings_button = gr.Button("Refresh Settings", variant="secondary")
-                    run_installer_button = gr.Button("🚀 Run Installer / Repair Installation (Recommended)", variant="primary", size="lg")
+                    refresh_settings_button = gr.Button("Refresh Hub", variant="secondary")
+                    run_installer_button = gr.Button("🚀 Run Installer / Repair Installation", variant="primary", size="lg")
                     health_check_button = gr.Button("Health Check", variant="primary", size="lg")
                 gr.Markdown(
-                    "**Recommended for first run. Repair is safe to run repeatedly.** It refreshes folders, paths, sample-test status, and the installer manifest without deleting outputs. "
-                    "It may take several minutes if dependencies or hardware checks are slow. When it finishes, this status should turn green; you can also run `python installer.py test-samples` as a quick verification."
+                    "**Installer repair is safe to run repeatedly.** It refreshes folders, paths, sample-test status, and the installer manifest without deleting outputs. "
+                    "When it finishes, this status should turn green; `python installer.py test-samples` remains the quick verification."
                 )
                 installer_run_output = gr.Textbox(label="Installer / Repair Output", lines=12, max_lines=18, interactive=False)
                 health_check_output = gr.Markdown(label="Health Check")
-                with gr.Accordion("Hugging Face login for gated models", open=True):
+
+                with gr.Accordion("Backup / Import / Reset", open=True):
+                    gr.Markdown("Export lightweight backups before pruning, importing, or resetting. Large generated videos are excluded to keep this fast.")
+                    with gr.Row():
+                        backup_characters = gr.Checkbox(label="Characters", value=True)
+                        backup_growth = gr.Checkbox(label="Growth data / sidecars", value=True)
+                        backup_settings = gr.Checkbox(label="Full settings", value=True)
+                    export_backup_button = gr.Button("Export Backup Bundle", variant="primary")
+                    backup_status = gr.Markdown()
+                    backup_file = gr.File(label="Backup zip")
+                    import_settings_json = gr.Code(label="Import Settings JSON", language="json")
+                    confirm_import = gr.Checkbox(label="I understand import replaces current local settings after making a pre-import copy", value=False)
+                    import_settings_button = gr.Button("Import Settings JSON", variant="secondary")
+                    confirm_reset = gr.Checkbox(label="I understand reset restores defaults after making a pre-reset copy", value=False)
+                    reset_settings_button = gr.Button("Reset to Defaults", variant="stop")
+
+                with gr.Accordion("Hugging Face login for gated models", open=False):
                     settings_hf_token = gr.Textbox(
                         label="Hugging Face token (stored in OS keyring when possible)",
                         type="password",
@@ -1330,7 +1806,7 @@ def build_ui() -> gr.Blocks:
                         save_hf_button = gr.Button("Login to Hugging Face", variant="primary")
                         test_hf_button = gr.Button("Test HF Access", variant="secondary")
                     hf_status_output = gr.Markdown()
-                with gr.Accordion("Model Downloader", open=True):
+                with gr.Accordion("Model Downloader", open=False):
                     gr.Markdown(
                         "Search model catalog entries, compare strengths/weaknesses, preview tier size estimates, and download models with progress feedback. "
                         "Skip Models is valid for slow internet or limited disk space."
@@ -1355,15 +1831,43 @@ def build_ui() -> gr.Blocks:
                     diagnostics_button = gr.Button("Export Diagnostics", variant="secondary")
                     diagnostics_output = gr.Markdown()
                 settings_json = gr.Code(label="Settings JSON (secrets redacted in display)", language="json")
+                settings_search.change(settings_search_markdown, inputs=[settings_search, settings_section], outputs=settings_navigation)
+                settings_section.change(settings_search_markdown, inputs=[settings_search, settings_section], outputs=settings_navigation)
+                for trigger in (settings_tts_voice.change, settings_tts_mood.change, settings_tts_speed.change):
+                    trigger(voice_preview_markdown, inputs=[settings_tts_voice, settings_tts_mood, settings_tts_speed], outputs=settings_voice_preview)
+                for trigger in (settings_performance_preset.change, settings_image_style.change, settings_vram_safety.change):
+                    trigger(image_preset_preview_markdown, inputs=[settings_performance_preset, settings_image_style, settings_vram_safety], outputs=settings_image_preview)
                 save_settings_button.click(
                     save_app_settings,
-                    inputs=[settings_runpod_key, settings_cloud_mode, settings_performance_preset, settings_vram_safety, settings_adult_gate, settings_theme, settings_dense_mode, settings_show_json],
+                    inputs=[
+                        settings_runpod_key,
+                        settings_cloud_mode,
+                        settings_performance_preset,
+                        settings_vram_safety,
+                        settings_adult_gate,
+                        settings_theme,
+                        settings_dense_mode,
+                        settings_show_json,
+                        settings_tts_enabled,
+                        settings_tts_voice,
+                        settings_tts_mood,
+                        settings_tts_speed,
+                        settings_image_style,
+                        settings_growth_enabled,
+                        settings_memory_prune,
+                        settings_memory_prune_days,
+                        settings_extensions_enabled,
+                        settings_autosave_minutes,
+                    ],
                     outputs=[settings_status, settings_json],
                     show_progress="full",
                 )
                 refresh_settings_button.click(settings_markdown, outputs=settings_status)
                 run_installer_button.click(run_installer_repair_from_ui, outputs=[settings_status, installer_run_output], show_progress="full")
                 health_check_button.click(run_health_check_from_ui, outputs=[settings_status, health_check_output], show_progress="full")
+                export_backup_button.click(export_settings_bundle, inputs=[backup_characters, backup_growth, backup_settings], outputs=[backup_status, backup_file], show_progress="full")
+                import_settings_button.click(import_settings_from_json, inputs=[import_settings_json, confirm_import], outputs=[settings_status, settings_json], show_progress="full")
+                reset_settings_button.click(reset_settings_to_defaults, inputs=confirm_reset, outputs=[settings_status, settings_json], show_progress="full")
                 save_hf_button.click(save_hf_token_from_ui, inputs=settings_hf_token, outputs=[settings_status, hf_status_output], show_progress="full")
                 test_hf_button.click(test_hf_access_from_ui, inputs=settings_hf_token, outputs=hf_status_output, show_progress="full")
                 for trigger in (model_search.change, model_category.change, model_tier.change):
