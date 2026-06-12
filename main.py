@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -40,11 +41,34 @@ from scoring import DEFAULT_THRESHOLD, is_approved, rolling_average, score_partn
 APP_TITLE = "Futa-Vision Director"
 SETTINGS_SCHEMA_VERSION = "phase4.2.settings.v1"
 DEFAULT_SETTINGS_PATH = Path("settings/futa_vision_settings.json")
+SETTINGS_BACKUP_DIR = Path("settings/backups")
+SETTINGS_EXTENSION_DIR = Path("settings/extensions")
+SETTINGS_EXPORT_DIR = Path("outputs/settings_exports")
 INSTALLER_MANIFEST_PATH = Path("settings/installer_manifest.json")
 INSTALLER_STATE_PATH = Path("settings/installer_state.json")
 INSTALLER_LOG_PATH = Path("logs/installer.log")
 ADULT_CONFIRMATION_ENV = "FUTA_VISION_REQUIRE_ADULT_CONFIRMATION"
 LOGGER = logging.getLogger("futa_vision_app")
+
+SETTINGS_HUB_CSS = """
+:root { color-scheme: dark; }
+.reverie-settings-hero {
+  padding: 1.1rem 1.25rem; border-radius: 22px;
+  background: linear-gradient(135deg, rgba(56, 31, 22, 0.92), rgba(18, 18, 24, 0.96));
+  border: 1px solid rgba(245, 158, 11, 0.26); box-shadow: 0 18px 60px rgba(0,0,0,0.28);
+}
+.reverie-settings-hero h2 { margin: 0 0 .35rem 0; color: #fff7ed; }
+.reverie-settings-hero p { color: #fed7aa; margin: 0; }
+.reverie-settings-card {
+  padding: .85rem 1rem; border-radius: 18px; background: rgba(30, 24, 21, .72);
+  border: 1px solid rgba(251, 191, 36, .18); min-height: 100%;
+}
+.reverie-settings-card strong { color: #fde68a; }
+.reverie-kbd {
+  display:inline-block; padding:.1rem .38rem; border-radius:.4rem;
+  border:1px solid rgba(251,191,36,.35); color:#fde68a; background:rgba(0,0,0,.35);
+}
+"""
 
 
 @dataclass(slots=True)
@@ -588,12 +612,30 @@ def app_polish_status() -> str:
     )
 
 
+def _deep_merge_settings(defaults: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge persisted settings onto safe defaults."""
+
+    merged = json.loads(json.dumps(defaults))
+    for key, value in payload.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_settings(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def default_app_settings() -> dict[str, Any]:
-    """Return persisted Settings-tab defaults for local-first use."""
+    """Return Settings & Control Hub defaults for local-first operation."""
 
     return {
         "schema_version": SETTINGS_SCHEMA_VERSION,
         "updated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "general": {
+            "project_home": str(Path.cwd()),
+            "autosave_minutes": 5,
+            "privacy_mode": "Local-first; ask before cloud upload",
+            "startup_tab": "Welcome",
+        },
         "cloud": {
             "runpod_api_key_present": bool(os.getenv("RUNPOD_API_KEY")),
             "default_mode": hardware_check.DEFAULT_CLOUD_MODE,
@@ -604,6 +646,8 @@ def default_app_settings() -> dict[str, Any]:
             "generation_resolution": "1280x720",
             "export_resolution": "1920x1080",
             "vram_safety": True,
+            "max_parallel_jobs": 1,
+            "cache_policy": "Disk cache on; clear generated previews manually",
             "oom_fallback": "Retry 960x540, then offer RunPod with explicit confirmation.",
         },
         "safety": {
@@ -612,16 +656,61 @@ def default_app_settings() -> dict[str, Any]:
             "cloud_privacy_notice_finalized": True,
         },
         "ui": {
-            "theme": "Soft",
+            "theme": "Warm Premium Dark",
             "dense_mode": False,
             "show_advanced_json": True,
             "status_badges": True,
+            "keyboard_hints": True,
+        },
+        "appearance": {
+            "accent": "Amber / rose gold",
+            "panel_density": "Comfortable",
+            "reduced_motion": False,
+            "high_contrast": False,
+        },
+        "tts_voice": {
+            "enabled": False,
+            "provider": "Local / plugin-ready",
+            "voice": "Warm narrator",
+            "mood": "Soft",
+            "sample_text": "This is a local voice preview. Nothing is uploaded unless you enable cloud execution.",
+        },
+        "image_generation": {
+            "preset": "Cinematic 3D anime — 720p safe",
+            "negative_prompt_strength": "Balanced",
+            "seed_mode": "Remember last good seed",
+            "preview_steps": 18,
+            "final_steps": 28,
+        },
+        "growth_self_learning": {
+            "automation": "Manual approve",
+            "learn_from_scores": True,
+            "auto_tag_successes": True,
+            "retention_days": 90,
+        },
+        "memory": {
+            "pruning": "Keep approvals and recent rejects",
+            "max_review_items": 250,
+            "include_private_notes_in_exports": False,
+            "continuity_memory": True,
+        },
+        "extensibility": {
+            "extension_settings_enabled": True,
+            "registry_dir": str(SETTINGS_EXTENSION_DIR),
+            "allow_third_party_sections": True,
+        },
+        "backup": {
+            "last_export_path": "",
+            "last_import_path": "",
+            "backup_before_import": True,
+            "include_characters": True,
+            "include_growth_data": True,
         },
     }
 
 
 def load_app_settings(settings_path: Path | None = None) -> dict[str, Any]:
-    """Load Settings-tab JSON without failing first launch."""
+    """Load Settings Hub JSON without failing first launch."""
 
     target_path = settings_path or DEFAULT_SETTINGS_PATH
     defaults = default_app_settings()
@@ -631,12 +720,21 @@ def load_app_settings(settings_path: Path | None = None) -> dict[str, Any]:
         payload = json.loads(target_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return defaults | {"warnings": [f"Ignoring corrupt settings file: {target_path}"]}
-    merged = defaults
-    for section in ("cloud", "performance", "safety", "ui"):
-        if isinstance(payload.get(section), dict):
-            merged[section].update(payload[section])
+    if not isinstance(payload, dict):
+        return defaults | {"warnings": [f"Ignoring non-object settings file: {target_path}"]}
+    merged = _deep_merge_settings(defaults, payload)
     merged["updated_at"] = payload.get("updated_at", merged["updated_at"])
     return merged
+
+
+def redacted_settings_json(settings: dict[str, Any] | None = None) -> str:
+    """Render settings as JSON while hiding local secrets."""
+
+    safe_payload = json.loads(json.dumps(settings or load_app_settings()))
+    cloud = safe_payload.get("cloud", {})
+    if cloud.get("runpod_api_key"):
+        cloud["runpod_api_key"] = "***redacted***"
+    return json.dumps(safe_payload, indent=2, sort_keys=True)
 
 
 def save_app_settings(
@@ -648,8 +746,14 @@ def save_app_settings(
     theme_option: str,
     dense_mode: bool,
     show_advanced_json: bool,
+    tts_mood: str = "Soft",
+    tts_voice: str = "Warm narrator",
+    image_preset: str = "Cinematic 3D anime — 720p safe",
+    growth_automation: str = "Manual approve",
+    memory_pruning: str = "Keep approvals and recent rejects",
+    extension_settings_enabled: bool = True,
 ) -> tuple[str, str]:
-    """Persist final Phase 4.2 Settings-tab preferences locally."""
+    """Persist Settings & Control Hub preferences locally."""
 
     selected_cloud_mode = default_cloud_mode if default_cloud_mode in hardware_check.CLOUD_MODE_OPTIONS else "Auto"
     normalized_key = (runpod_api_key or "").strip()
@@ -661,13 +765,15 @@ def save_app_settings(
         "default_mode": selected_cloud_mode,
         "privacy_requires_upload_confirmation": True,
     }
-    current["performance"] = {
-        "preset": performance_preset,
-        "generation_resolution": "1280x720" if "720" in performance_preset else "1280x720 local source with higher final upscale",
-        "export_resolution": "1920x1080" if "1080" in performance_preset or "720" in performance_preset else "2560x1440+ cloud recommended",
-        "vram_safety": bool(vram_safety),
-        "oom_fallback": "Retry 960x540 locally, then ask for RunPod upload confirmation.",
-    }
+    current["performance"].update(
+        {
+            "preset": performance_preset,
+            "generation_resolution": "1280x720" if "720" in performance_preset else "1280x720 local source with higher final upscale",
+            "export_resolution": "1920x1080" if "1080" in performance_preset or "720" in performance_preset else "2560x1440+ cloud recommended",
+            "vram_safety": bool(vram_safety),
+            "oom_fallback": "Retry 960x540 locally, then ask for RunPod upload confirmation.",
+        }
+    )
     current["safety"] = {
         "adult_gate_required": bool(require_adult_gate),
         "lawful_consensual_only": True,
@@ -679,24 +785,240 @@ def save_app_settings(
         "dense_mode": bool(dense_mode),
         "show_advanced_json": bool(show_advanced_json),
         "status_badges": True,
+        "keyboard_hints": True,
     }
+    current["appearance"].update({"panel_density": "Compact" if dense_mode else "Comfortable"})
+    current["tts_voice"].update({"mood": tts_mood, "voice": tts_voice})
+    current["image_generation"].update({"preset": image_preset})
+    current["growth_self_learning"].update({"automation": growth_automation})
+    current["memory"].update({"pruning": memory_pruning})
+    current["extensibility"].update({"extension_settings_enabled": bool(extension_settings_enabled)})
     if normalized_key:
         current["cloud"]["runpod_api_key"] = normalized_key
     DEFAULT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    safe_payload = json.loads(json.dumps(current))
-    if safe_payload.get("cloud", {}).get("runpod_api_key"):
-        safe_payload["cloud"]["runpod_api_key"] = "***redacted***"
     DEFAULT_SETTINGS_PATH.write_text(json.dumps(current, indent=2, sort_keys=True), encoding="utf-8")
     summary = (
         "## ✅ Settings saved\n"
         f"- Cloud default: `{selected_cloud_mode}`\n"
         f"- Performance preset: `{performance_preset}`\n"
+        f"- TTS mood / voice: `{tts_mood}` / `{tts_voice}`\n"
+        f"- Image preset: `{image_preset}`\n"
+        f"- Growth automation: `{growth_automation}`\n"
+        f"- Memory pruning: `{memory_pruning}`\n"
         f"- Adult gate required: `{bool(require_adult_gate)}`\n"
         f"- Theme: `{theme_option}`\n"
         "- Cloud uploads still require explicit per-job confirmation."
     )
-    return summary, json.dumps(safe_payload, indent=2, sort_keys=True)
+    return summary, redacted_settings_json(current)
 
+
+def discover_extension_setting_sections(registry_dir: Path | None = None) -> list[dict[str, Any]]:
+    """Load extension-contributed Settings Hub sections from JSON manifests."""
+
+    directory = registry_dir or SETTINGS_EXTENSION_DIR
+    if not directory.exists():
+        return []
+    sections: list[dict[str, Any]] = []
+    for manifest_path in sorted(directory.glob("*.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            sections.append(
+                {
+                    "id": manifest_path.stem,
+                    "title": manifest_path.stem.replace("_", " ").title(),
+                    "description": f"Invalid extension settings manifest: {manifest_path}",
+                    "status": "error",
+                    "controls": [],
+                }
+            )
+            continue
+        raw_sections = manifest.get("setting_sections", manifest.get("settings", []))
+        if isinstance(raw_sections, dict):
+            raw_sections = [raw_sections]
+        for section in raw_sections if isinstance(raw_sections, list) else []:
+            if not isinstance(section, dict):
+                continue
+            section_id = str(section.get("id") or f"{manifest_path.stem}_settings")
+            sections.append(
+                {
+                    "id": section_id,
+                    "title": str(section.get("title") or section_id.replace("_", " ").title()),
+                    "description": str(section.get("description") or "Extension registered settings."),
+                    "status": str(section.get("status") or "registered"),
+                    "controls": section.get("controls", []) if isinstance(section.get("controls", []), list) else [],
+                    "source": str(manifest_path),
+                }
+            )
+    return sections
+
+
+def settings_control_preview(
+    tts_mood: str,
+    tts_voice: str,
+    image_preset: str,
+    performance_preset: str,
+    growth_automation: str,
+    memory_pruning: str,
+) -> str:
+    """Render a real-time preview for voice, image, growth, memory, and 8 GB impact choices."""
+
+    vram_note = "Safe for RTX 4070 8GB: 720p local generation, one heavy job at a time, disk cache enabled."
+    if "Higher Quality" in performance_preset:
+        vram_note = "Higher quality increases VRAM and time; keep 720p source local and prefer cloud/final upscale for 1440p+."
+    elif "Preview Fast" in performance_preset:
+        vram_note = "Fast preview reduces steps and cache pressure; use it for prompt iteration before final approval."
+    return (
+        "### Live Control Preview\n"
+        f"- **TTS sample:** `{tts_voice}` voice in `{tts_mood}` mood will read the saved sample text locally unless a voice plugin asks for cloud consent.\n"
+        f"- **Image preset:** `{image_preset}` sets preview/final steps while preserving seed reproducibility.\n"
+        f"- **8GB impact:** {vram_note}\n"
+        f"- **Growth loop:** `{growth_automation}` controls whether scores become suggestions or automated low-risk updates.\n"
+        f"- **Memory policy:** `{memory_pruning}` decides what review history survives pruning and exports."
+    )
+
+
+def settings_hub_overview_markdown(search_query: str = "") -> str:
+    """Render the searchable Settings Hub overview and navigation."""
+
+    settings = load_app_settings()
+    extension_sections = discover_extension_setting_sections() if settings["extensibility"].get("extension_settings_enabled", True) else []
+    sections = [
+        ("General", "Startup, privacy, autosave, first-run defaults."),
+        ("Appearance", "Warm premium dark theme, density, contrast, keyboard hints."),
+        ("TTS & Voice", "Mood, voice sample, provider/plugin bridge."),
+        ("Image Generation", "Presets, seed behavior, preview/final quality."),
+        ("Growth & Self-Learning", "Score learning, automation, retention."),
+        ("Memory", "Continuity memory, pruning, private notes in exports."),
+        ("Extensibility", "Third-party sections from settings/extensions/*.json."),
+        ("Performance & 8GB", "4070-safe resolution, OOM retry, cache policy."),
+        ("Backup / Import / Reset", "Portable exports, safe imports, reset confirmation."),
+    ]
+    if extension_sections:
+        sections.extend((f"Extension: {item['title']}", item["description"]) for item in extension_sections)
+    needle = (search_query or "").strip().lower()
+    if needle:
+        sections = [item for item in sections if needle in item[0].lower() or needle in item[1].lower()]
+    rows = "\n".join(f"- **{title}:** {description}" for title, description in sections) or "- No matching settings sections."
+    return (
+        "<div class='reverie-settings-hero'><h2>⚙️ Settings & Control Hub</h2>"
+        "<p>One command center for local-first privacy, 8GB-safe performance, creative controls, backups, and extension settings.</p></div>\n\n"
+        f"{app_polish_status()}\n\n"
+        f"### Navigation ({len(sections)} shown)\n{rows}\n\n"
+        "Keyboard: use <span class='reverie-kbd'>Tab</span>/<span class='reverie-kbd'>Shift+Tab</span> to move controls and <span class='reverie-kbd'>Enter</span> to activate buttons."
+    )
+
+
+def extension_sections_markdown() -> str:
+    """Render extension-registered setting sections for the hub."""
+
+    sections = discover_extension_setting_sections()
+    if not sections:
+        return "No extension settings registered yet. Drop JSON manifests into `settings/extensions/` with a `setting_sections` list."
+    blocks = []
+    for section in sections:
+        controls = section.get("controls", [])
+        control_lines = []
+        for control in controls[:12]:
+            if isinstance(control, dict):
+                label = control.get("label") or control.get("id") or "Unnamed control"
+                kind = control.get("type", "control")
+                help_text = control.get("help", "")
+                control_lines.append(f"  - `{kind}` **{label}** — {help_text}".rstrip(" — "))
+        controls_md = "\n".join(control_lines) if control_lines else "  - No controls declared yet."
+        blocks.append(
+            f"### {section['title']}\n"
+            f"{section['description']}\n\n"
+            f"- Status: `{section['status']}`\n"
+            f"- Source: `{section.get('source', 'runtime')}`\n"
+            f"- Controls:\n{controls_md}"
+        )
+    return "\n\n".join(blocks)
+
+
+def export_settings_bundle(
+    include_characters: bool,
+    include_growth_data: bool,
+    include_full_settings: bool,
+) -> str:
+    """Export a portable Settings Hub backup bundle."""
+
+    SETTINGS_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    output_path = SETTINGS_EXPORT_DIR / f"futa_vision_settings_bundle_{timestamp}.json"
+    bundle: dict[str, Any] = {
+        "schema_version": "settings_hub_export.v1",
+        "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "app": APP_TITLE,
+        "includes": {
+            "characters": bool(include_characters),
+            "growth_data": bool(include_growth_data),
+            "full_settings": bool(include_full_settings),
+        },
+    }
+    if include_full_settings:
+        bundle["settings"] = load_app_settings()
+    if include_characters:
+        try:
+            bundle["characters"] = [asdict(record) for record in character_library.search_library(limit=500)]
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            bundle["characters_error"] = str(exc)
+    if include_growth_data:
+        growth_paths = [Path("outputs/scoring"), Path("outputs/reviews"), Path("cache/growth")]
+        bundle["growth_data"] = {
+            str(path): sorted(str(item) for item in path.glob("*.json"))[:100] if path.exists() else []
+            for path in growth_paths
+        }
+    output_path.write_text(json.dumps(bundle, indent=2, sort_keys=True), encoding="utf-8")
+    settings = load_app_settings()
+    settings["backup"]["last_export_path"] = str(output_path)
+    settings["updated_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+    DEFAULT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DEFAULT_SETTINGS_PATH.write_text(json.dumps(settings, indent=2, sort_keys=True), encoding="utf-8")
+    return f"✅ Exported Settings Hub bundle to `{output_path}`."
+
+
+def import_settings_bundle(import_path: str, confirm_import: bool) -> tuple[str, str]:
+    """Import settings from a bundle after explicit confirmation and backup."""
+
+    if not confirm_import:
+        return "⚠️ Check the confirmation box before importing settings.", redacted_settings_json()
+    path = Path((import_path or "").strip())
+    if not path.exists():
+        return f"❌ Import file not found: `{path}`", redacted_settings_json()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return f"❌ Import file is not valid JSON: {exc}", redacted_settings_json()
+    imported_settings = payload.get("settings", payload)
+    if not isinstance(imported_settings, dict):
+        return "❌ Import payload does not contain a settings object.", redacted_settings_json()
+    if DEFAULT_SETTINGS_PATH.exists():
+        SETTINGS_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        backup_path = SETTINGS_BACKUP_DIR / f"futa_vision_settings_before_import_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+        backup_path.write_text(DEFAULT_SETTINGS_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    merged = _deep_merge_settings(default_app_settings(), imported_settings)
+    merged["backup"]["last_import_path"] = str(path)
+    merged["updated_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+    DEFAULT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DEFAULT_SETTINGS_PATH.write_text(json.dumps(merged, indent=2, sort_keys=True), encoding="utf-8")
+    return f"✅ Imported settings from `{path}` and refreshed safe defaults.", redacted_settings_json(merged)
+
+
+def reset_settings_to_defaults(confirm_reset: bool) -> tuple[str, str]:
+    """Reset settings only after explicit confirmation."""
+
+    if not confirm_reset:
+        return "⚠️ Check the confirmation box before resetting settings.", redacted_settings_json()
+    if DEFAULT_SETTINGS_PATH.exists():
+        SETTINGS_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        backup_path = SETTINGS_BACKUP_DIR / f"futa_vision_settings_before_reset_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+        backup_path.write_text(DEFAULT_SETTINGS_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    defaults = default_app_settings()
+    defaults["updated_at"] = datetime.now(UTC).replace(microsecond=0).isoformat()
+    DEFAULT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DEFAULT_SETTINGS_PATH.write_text(json.dumps(defaults, indent=2, sort_keys=True), encoding="utf-8")
+    return "✅ Settings reset to defaults. A backup was created first when prior settings existed.", redacted_settings_json(defaults)
 
 
 
@@ -1118,19 +1440,26 @@ def export_diagnostics_from_ui() -> str:
 
 
 def settings_markdown() -> str:
-    """Render current app settings plus Phase 5 installer status for the Settings tab."""
+    """Render current Settings & Control Hub status plus installer health."""
 
     settings = load_app_settings()
+    extension_count = len(discover_extension_setting_sections()) if settings["extensibility"].get("extension_settings_enabled", True) else 0
     return (
-        "## Current Phase 4.2 Settings\n"
+        "## Current Phase 4.2 Settings — upgraded to Milestone 3 Task 5D Control Hub\n"
         f"{app_polish_status()}\n\n"
         f"- Cloud default mode: `{settings['cloud']['default_mode']}`\n"
         f"- RunPod key present: `{settings['cloud']['runpod_api_key_present']}`\n"
         f"- Performance: `{settings['performance']['preset']}`\n"
-        f"- VRAM safety: `{settings['performance']['vram_safety']}`\n"
+        f"- VRAM safety: `{settings['performance']['vram_safety']}` — {settings['performance']['oom_fallback']}\n"
+        f"- TTS mood / voice: `{settings['tts_voice']['mood']}` / `{settings['tts_voice']['voice']}`\n"
+        f"- Image preset: `{settings['image_generation']['preset']}`\n"
+        f"- Growth automation: `{settings['growth_self_learning']['automation']}`\n"
+        f"- Memory pruning: `{settings['memory']['pruning']}`\n"
+        f"- Extension setting sections: `{extension_count}` registered\n"
         f"- Adult gate required: `{settings['safety']['adult_gate_required']}`\n"
         f"- UI theme: `{settings['ui']['theme']}`\n"
-        "- Export path: `outputs/final_videos` with MP4 sidecar metadata.\n\n"
+        "- Export path: `outputs/final_videos` with MP4 sidecar metadata.\n"
+        "- Settings backup path: `settings/backups`; portable bundles: `outputs/settings_exports`.\n\n"
         f"{installer_status_markdown()}"
     )
 
@@ -1200,7 +1529,7 @@ def build_ui() -> gr.Blocks:
     initial_interactive = initial_confirmed
     initial_tab = post_install_start_tab(initial_interactive)
 
-    with gr.Blocks(title=APP_TITLE) as demo:
+    with gr.Blocks(title=APP_TITLE, css=SETTINGS_HUB_CSS) as demo:
         gr.Markdown(
             f"# {APP_TITLE}\n"
             "Phase 5: guided installer, VRAM-safe setup, settings polish, and beginner-friendly repair tools."
@@ -1265,24 +1594,96 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(phase0_test_markdown())
 
             with gr.Tab("⚙️ Settings", id="Settings"):
-                gr.Markdown(
-                    "Finalize installer, cloud, performance, safety, and theme preferences for Phase 5. "
-                    "Settings are stored locally in `settings/futa_vision_settings.json`; cloud uploads still require per-job approval."
-                )
-                settings_status = gr.Markdown(settings_markdown())
                 settings_defaults = load_app_settings()
-                with gr.Accordion("Cloud preferences", open=True):
-                    settings_runpod_key = gr.Textbox(
-                        label="RunPod API key (local settings / optional)",
-                        type="password",
-                        placeholder="Leave blank to use RUNPOD_API_KEY from .env",
+                gr.Markdown(settings_hub_overview_markdown())
+                with gr.Row():
+                    settings_search = gr.Textbox(
+                        label="Search settings",
+                        placeholder="Try: voice, 8GB, memory, backup, extensions",
+                        scale=3,
                     )
-                    settings_cloud_mode = gr.Radio(
-                        hardware_check.CLOUD_MODE_OPTIONS,
-                        value=settings_defaults["cloud"].get("default_mode", hardware_check.DEFAULT_CLOUD_MODE),
-                        label="Default execution mode",
+                    refresh_settings_button = gr.Button("Refresh Hub", variant="secondary", scale=1)
+                settings_overview = gr.Markdown(settings_hub_overview_markdown())
+                settings_status = gr.Markdown(settings_markdown())
+
+                with gr.Accordion("General", open=True):
+                    gr.Markdown(
+                        "Local-first defaults, autosave, and privacy posture. Cloud uploads remain opt-in per job, even when RunPod is configured."
                     )
-                with gr.Accordion("Performance presets", open=True):
+                    with gr.Row():
+                        gr.Textbox(label="Project home", value=settings_defaults["general"].get("project_home", str(Path.cwd())), interactive=False)
+                        gr.Number(label="Autosave minutes", value=settings_defaults["general"].get("autosave_minutes", 5), precision=0, interactive=False)
+                    settings_adult_gate = gr.Checkbox(
+                        label="Require adult confirmation gate every local session",
+                        value=bool(settings_defaults["safety"].get("adult_gate_required", adult_confirmation_required())),
+                    )
+                    gr.Markdown(
+                        "The operator must be an adult and create only lawful, consensual adult content. Private prompts, references, LoRAs, and outputs stay local unless a job explicitly enables cloud upload."
+                    )
+
+                with gr.Accordion("Appearance", open=True):
+                    with gr.Row():
+                        settings_theme = gr.Radio(
+                            ["Warm Premium Dark", "Soft", "Default", "Monochrome"],
+                            value=settings_defaults["ui"].get("theme", "Warm Premium Dark"),
+                            label="Theme preference",
+                        )
+                        settings_dense_mode = gr.Checkbox(
+                            label="Dense mode (compact controls)",
+                            value=bool(settings_defaults["ui"].get("dense_mode", False)),
+                        )
+                        settings_show_json = gr.Checkbox(
+                            label="Show advanced JSON manifests by default",
+                            value=bool(settings_defaults["ui"].get("show_advanced_json", True)),
+                        )
+                    gr.Markdown("Warm premium dark is tuned for long sessions: amber hierarchy, clear cards, visible focus order, and readable explanatory copy.")
+
+                with gr.Accordion("TTS & Voice", open=True):
+                    gr.Markdown("Voice controls are plugin-ready and local-first. Use the preview to confirm mood and provider impact before saving.")
+                    with gr.Row():
+                        settings_tts_mood = gr.Radio(["Soft", "Confident", "Playful", "Narration", "Whisper"], value=settings_defaults["tts_voice"].get("mood", "Soft"), label="TTS mood")
+                        settings_tts_voice = gr.Dropdown(["Warm narrator", "Bright assistant", "Low intimate", "Plugin voice"], value=settings_defaults["tts_voice"].get("voice", "Warm narrator"), label="Voice")
+                    tts_sample = gr.Textbox(label="Voice sample text", value=settings_defaults["tts_voice"].get("sample_text", "This is a local voice preview."), interactive=True)
+
+                with gr.Accordion("Image Generation", open=True):
+                    gr.Markdown("Presets explain quality/time tradeoffs and protect 8GB GPUs from runaway settings.")
+                    settings_image_preset = gr.Radio(
+                        [
+                            "Cinematic 3D anime — 720p safe",
+                            "Fast prompt drafts — low steps",
+                            "High polish stills — cloud/upscale recommended",
+                            "Character sheet consistency — seed locked",
+                        ],
+                        value=settings_defaults["image_generation"].get("preset", "Cinematic 3D anime — 720p safe"),
+                        label="Image preset",
+                    )
+                    gr.Markdown("Preview: 18-ish steps for iteration; final: 28-ish steps when approved. Keep local source at 720p and upscale after assembly.")
+
+                with gr.Accordion("Growth & Self-Learning", open=False):
+                    settings_growth_automation = gr.Radio(
+                        ["Manual approve", "Suggest only", "Auto-apply safe metadata", "Pause learning"],
+                        value=settings_defaults["growth_self_learning"].get("automation", "Manual approve"),
+                        label="Growth automation",
+                    )
+                    gr.Markdown("Score learning can auto-tag successful generations, but risky creative changes should remain human-approved.")
+
+                with gr.Accordion("Memory", open=False):
+                    settings_memory_pruning = gr.Radio(
+                        ["Keep approvals and recent rejects", "Aggressive 8GB cleanup", "Keep everything", "Private session only"],
+                        value=settings_defaults["memory"].get("pruning", "Keep approvals and recent rejects"),
+                        label="Memory pruning policy",
+                    )
+                    gr.Markdown("8GB-friendly pruning limits old review payloads and cache pressure while preserving approved continuity memories.")
+
+                with gr.Accordion("Extensibility", open=False):
+                    settings_extension_enabled = gr.Checkbox(
+                        label="Allow extensions to register Settings Hub sections",
+                        value=bool(settings_defaults["extensibility"].get("extension_settings_enabled", True)),
+                    )
+                    extension_settings_output = gr.Markdown(extension_sections_markdown())
+                    refresh_extension_sections = gr.Button("Refresh extension sections", variant="secondary")
+
+                with gr.Accordion("Performance & 8GB", open=True):
                     settings_performance_preset = gr.Radio(
                         [
                             "RTX 4070 8GB Safe — 720p generate + 1080p export",
@@ -1296,72 +1697,81 @@ def build_ui() -> gr.Blocks:
                         label="Enable VRAM safety (4070 8GB: 720p local, 960x540 OOM retry, cloud fallback prompt)",
                         value=bool(settings_defaults["performance"].get("vram_safety", True)),
                     )
-                with gr.Accordion("NSFW disclaimer / age gate finalization", open=True):
-                    settings_adult_gate = gr.Checkbox(
-                        label="Require adult confirmation gate every local session",
-                        value=bool(settings_defaults["safety"].get("adult_gate_required", adult_confirmation_required())),
-                    )
+                    settings_preview = gr.Markdown(settings_control_preview(
+                        settings_defaults["tts_voice"].get("mood", "Soft"),
+                        settings_defaults["tts_voice"].get("voice", "Warm narrator"),
+                        settings_defaults["image_generation"].get("preset", "Cinematic 3D anime — 720p safe"),
+                        settings_defaults["performance"].get("preset", "RTX 4070 8GB Safe — 720p generate + 1080p export"),
+                        settings_defaults["growth_self_learning"].get("automation", "Manual approve"),
+                        settings_defaults["memory"].get("pruning", "Keep approvals and recent rejects"),
+                    ))
+
+                with gr.Accordion("Cloud, Installer, and Model Downloader", open=True):
+                    with gr.Row():
+                        settings_runpod_key = gr.Textbox(label="RunPod API key (local settings / optional)", type="password", placeholder="Leave blank to use RUNPOD_API_KEY from .env")
+                        settings_cloud_mode = gr.Radio(hardware_check.CLOUD_MODE_OPTIONS, value=settings_defaults["cloud"].get("default_mode", hardware_check.DEFAULT_CLOUD_MODE), label="Default execution mode")
+                    with gr.Row():
+                        run_installer_button = gr.Button("🚀 Run Installer / Repair Installation (Recommended)", variant="primary", size="lg")
+                        health_check_button = gr.Button("Health Check", variant="primary", size="lg")
                     gr.Markdown(
-                        "By using this app, the operator confirms they are an adult and will create only lawful, consensual adult content. "
-                        "Private prompts, references, LoRAs, and outputs remain local unless an explicit cloud-upload checkbox is enabled for that job."
+                        "**Recommended for first run. Repair is safe to run repeatedly.** It refreshes folders, paths, sample-test status, and the installer manifest without deleting outputs."
                     )
-                with gr.Accordion("General UI / theme options", open=False):
-                    settings_theme = gr.Radio(["Soft", "Default", "Monochrome"], value=settings_defaults["ui"].get("theme", "Soft"), label="Theme preference")
-                    settings_dense_mode = gr.Checkbox(label="Dense mode (compact controls)", value=bool(settings_defaults["ui"].get("dense_mode", False)))
-                    settings_show_json = gr.Checkbox(label="Show advanced JSON manifests by default", value=bool(settings_defaults["ui"].get("show_advanced_json", True)))
-                with gr.Row():
-                    save_settings_button = gr.Button("Save Settings", variant="primary")
-                    refresh_settings_button = gr.Button("Refresh Settings", variant="secondary")
-                    run_installer_button = gr.Button("🚀 Run Installer / Repair Installation (Recommended)", variant="primary", size="lg")
-                    health_check_button = gr.Button("Health Check", variant="primary", size="lg")
-                gr.Markdown(
-                    "**Recommended for first run. Repair is safe to run repeatedly.** It refreshes folders, paths, sample-test status, and the installer manifest without deleting outputs. "
-                    "It may take several minutes if dependencies or hardware checks are slow. When it finishes, this status should turn green; you can also run `python installer.py test-samples` as a quick verification."
-                )
-                installer_run_output = gr.Textbox(label="Installer / Repair Output", lines=12, max_lines=18, interactive=False)
-                health_check_output = gr.Markdown(label="Health Check")
-                with gr.Accordion("Hugging Face login for gated models", open=True):
-                    settings_hf_token = gr.Textbox(
-                        label="Hugging Face token (stored in OS keyring when possible)",
-                        type="password",
-                        placeholder="Optional; needed for gated model downloads",
-                    )
+                    installer_run_output = gr.Textbox(label="Installer / Repair Output", lines=12, max_lines=18, interactive=False)
+                    health_check_output = gr.Markdown(label="Health Check")
+                    with gr.Accordion("Hugging Face login for gated models", open=False):
+                        settings_hf_token = gr.Textbox(label="Hugging Face token (stored in OS keyring when possible)", type="password", placeholder="Optional; needed for gated model downloads")
+                        with gr.Row():
+                            save_hf_button = gr.Button("Login to Hugging Face", variant="primary")
+                            test_hf_button = gr.Button("Test HF Access", variant="secondary")
+                        hf_status_output = gr.Markdown()
+                    with gr.Accordion("Model Downloader", open=False):
+                        gr.Markdown("Search model catalog entries, compare strengths/weaknesses, preview tier size estimates, and download models with progress feedback.")
+                        with gr.Row():
+                            model_search = gr.Textbox(label="Search", placeholder="futa anatomy, slime physics, fast preview")
+                            model_category = gr.Dropdown(["all", "base", "lora", "samples", "video", "upscale"], value="all", label="Category")
+                            model_tier = gr.Radio(["minimal", "standard", "full", "custom"], value="minimal", label="Tier")
+                            model_skip = gr.Checkbox(label="Skip Models / framework only", value=False)
+                        model_catalog_output = gr.Markdown(model_downloader_markdown())
+                        model_progress_output = gr.Textbox(label="Download Progress", lines=8, max_lines=14, interactive=False)
+                        with gr.Row():
+                            preview_model_tier_button = gr.Button("Preview Tier", variant="secondary")
+                            download_model_tier_button = gr.Button("Download Tier", variant="primary")
+
+                with gr.Accordion("Backup / Import / Reset", open=False):
+                    gr.Markdown("Export/import characters, growth data, and full settings as portable JSON. Import and reset require explicit confirmation and create backups first.")
                     with gr.Row():
-                        save_hf_button = gr.Button("Login to Hugging Face", variant="primary")
-                        test_hf_button = gr.Button("Test HF Access", variant="secondary")
-                    hf_status_output = gr.Markdown()
-                with gr.Accordion("Model Downloader", open=True):
-                    gr.Markdown(
-                        "Search model catalog entries, compare strengths/weaknesses, preview tier size estimates, and download models with progress feedback. "
-                        "Skip Models is valid for slow internet or limited disk space."
-                    )
+                        export_characters = gr.Checkbox(label="Include characters", value=True)
+                        export_growth = gr.Checkbox(label="Include growth data", value=True)
+                        export_full_settings = gr.Checkbox(label="Include full settings", value=True)
+                    export_settings_button = gr.Button("Export / Backup Bundle", variant="primary")
+                    export_settings_output = gr.Markdown()
                     with gr.Row():
-                        model_search = gr.Textbox(label="Search", placeholder="futa anatomy, slime physics, fast preview")
-                        model_category = gr.Dropdown(["all", "base", "lora", "samples", "video", "upscale"], value="all", label="Category")
-                        model_tier = gr.Radio(["minimal", "standard", "full", "custom"], value="minimal", label="Tier")
-                        model_skip = gr.Checkbox(label="Skip Models / framework only", value=False)
-                    model_catalog_output = gr.Markdown(model_downloader_markdown())
-                    model_progress_output = gr.Textbox(
-                        label="Download Progress",
-                        lines=8,
-                        max_lines=14,
-                        interactive=False,
-                        placeholder="Progress bars show current file, size, speed, ETA, and status during live downloads.",
-                    )
+                        import_settings_path = gr.Textbox(label="Import bundle path", placeholder="outputs/settings_exports/futa_vision_settings_bundle_YYYYMMDD_HHMMSS.json")
+                        confirm_import = gr.Checkbox(label="I understand import will merge settings after backing up current settings", value=False)
+                    import_settings_button = gr.Button("Import Settings Bundle", variant="secondary")
                     with gr.Row():
-                        preview_model_tier_button = gr.Button("Preview Tier", variant="secondary")
-                        download_model_tier_button = gr.Button("Download Tier", variant="primary")
+                        confirm_reset = gr.Checkbox(label="I understand reset restores defaults after backing up current settings", value=False)
+                        reset_settings_button = gr.Button("Reset to Defaults", variant="stop")
+                    backup_output = gr.Markdown()
+
                 with gr.Accordion("Diagnostics", open=False):
                     diagnostics_button = gr.Button("Export Diagnostics", variant="secondary")
                     diagnostics_output = gr.Markdown()
-                settings_json = gr.Code(label="Settings JSON (secrets redacted in display)", language="json")
+                with gr.Row():
+                    save_settings_button = gr.Button("Save Settings", variant="primary")
+                settings_json = gr.Code(label="Settings JSON (secrets redacted in display)", language="json", value=redacted_settings_json(settings_defaults))
+
                 save_settings_button.click(
                     save_app_settings,
-                    inputs=[settings_runpod_key, settings_cloud_mode, settings_performance_preset, settings_vram_safety, settings_adult_gate, settings_theme, settings_dense_mode, settings_show_json],
+                    inputs=[settings_runpod_key, settings_cloud_mode, settings_performance_preset, settings_vram_safety, settings_adult_gate, settings_theme, settings_dense_mode, settings_show_json, settings_tts_mood, settings_tts_voice, settings_image_preset, settings_growth_automation, settings_memory_pruning, settings_extension_enabled],
                     outputs=[settings_status, settings_json],
                     show_progress="full",
                 )
                 refresh_settings_button.click(settings_markdown, outputs=settings_status)
+                settings_search.change(settings_hub_overview_markdown, inputs=settings_search, outputs=settings_overview)
+                for trigger in (settings_tts_mood.change, settings_tts_voice.change, settings_image_preset.change, settings_performance_preset.change, settings_growth_automation.change, settings_memory_pruning.change):
+                    trigger(settings_control_preview, inputs=[settings_tts_mood, settings_tts_voice, settings_image_preset, settings_performance_preset, settings_growth_automation, settings_memory_pruning], outputs=settings_preview)
+                refresh_extension_sections.click(extension_sections_markdown, outputs=extension_settings_output)
                 run_installer_button.click(run_installer_repair_from_ui, outputs=[settings_status, installer_run_output], show_progress="full")
                 health_check_button.click(run_health_check_from_ui, outputs=[settings_status, health_check_output], show_progress="full")
                 save_hf_button.click(save_hf_token_from_ui, inputs=settings_hf_token, outputs=[settings_status, hf_status_output], show_progress="full")
@@ -1371,6 +1781,9 @@ def build_ui() -> gr.Blocks:
                 model_skip.change(model_downloader_markdown, inputs=[model_search, model_category, model_tier], outputs=model_catalog_output)
                 preview_model_tier_button.click(preview_model_tier_from_ui, inputs=[model_tier, model_skip], outputs=[model_catalog_output, model_progress_output], show_progress="full")
                 download_model_tier_button.click(download_model_tier_from_ui, inputs=[model_tier, model_skip], outputs=[model_catalog_output, model_progress_output], show_progress="full")
+                export_settings_button.click(export_settings_bundle, inputs=[export_characters, export_growth, export_full_settings], outputs=export_settings_output, show_progress="full")
+                import_settings_button.click(import_settings_bundle, inputs=[import_settings_path, confirm_import], outputs=[backup_output, settings_json], show_progress="full")
+                reset_settings_button.click(reset_settings_to_defaults, inputs=confirm_reset, outputs=[backup_output, settings_json], show_progress="full")
                 diagnostics_button.click(export_diagnostics_from_ui, outputs=diagnostics_output, show_progress="full")
 
             with gr.Tab("Train General Physics LoRA", id="Train General Physics LoRA", visible=initial_interactive) as training_tab:

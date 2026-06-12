@@ -72,3 +72,79 @@ def test_settings_markdown_includes_phase42_status(tmp_path: Path, monkeypatch) 
     assert "Current Phase 4.2 Settings" in markdown
     assert "4070 8GB Safe Defaults" in markdown
     assert "outputs/final_videos" in markdown
+
+
+def test_settings_hub_defaults_include_task5d_sections(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "DEFAULT_SETTINGS_PATH", tmp_path / "missing_settings.json")
+
+    settings = main.load_app_settings()
+
+    assert settings["ui"]["theme"] == "Warm Premium Dark"
+    assert settings["tts_voice"]["mood"] == "Soft"
+    assert settings["image_generation"]["preset"] == "Cinematic 3D anime — 720p safe"
+    assert settings["growth_self_learning"]["automation"] == "Manual approve"
+    assert settings["memory"]["pruning"] == "Keep approvals and recent rejects"
+    assert settings["extensibility"]["allow_third_party_sections"] is True
+    assert settings["backup"]["include_characters"] is True
+
+
+def test_extension_setting_sections_are_discovered(tmp_path: Path) -> None:
+    extension_dir = tmp_path / "extensions"
+    extension_dir.mkdir()
+    (extension_dir / "voice_plugin.json").write_text(
+        json.dumps(
+            {
+                "setting_sections": [
+                    {
+                        "id": "voice_plugin",
+                        "title": "Voice Plugin",
+                        "description": "Plugin voice controls.",
+                        "controls": [{"id": "voice", "type": "dropdown", "label": "Voice"}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    sections = main.discover_extension_setting_sections(extension_dir)
+
+    assert sections[0]["id"] == "voice_plugin"
+    assert sections[0]["controls"][0]["label"] == "Voice"
+
+
+def test_export_import_and_reset_settings_bundle(tmp_path: Path, monkeypatch) -> None:
+    settings_path = tmp_path / "settings" / "futa_vision_settings.json"
+    monkeypatch.setattr(main, "DEFAULT_SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(main, "SETTINGS_EXPORT_DIR", tmp_path / "exports")
+    monkeypatch.setattr(main, "SETTINGS_BACKUP_DIR", tmp_path / "backups")
+
+    main.save_app_settings(
+        runpod_api_key="",
+        default_cloud_mode="Auto",
+        performance_preset="Preview Fast — 720p drafts / minimal cache",
+        vram_safety=True,
+        require_adult_gate=True,
+        theme_option="Warm Premium Dark",
+        dense_mode=True,
+        show_advanced_json=False,
+        tts_mood="Confident",
+        tts_voice="Bright assistant",
+        image_preset="Fast prompt drafts — low steps",
+        growth_automation="Suggest only",
+        memory_pruning="Aggressive 8GB cleanup",
+        extension_settings_enabled=True,
+    )
+
+    export_message = main.export_settings_bundle(False, False, True)
+    export_path = Path(export_message.split("`")[1])
+    assert export_path.exists()
+
+    imported_message, imported_json = main.import_settings_bundle(str(export_path), True)
+    assert "Imported settings" in imported_message
+    assert json.loads(imported_json)["tts_voice"]["mood"] == "Confident"
+
+    reset_message, reset_json = main.reset_settings_to_defaults(True)
+    assert "Settings reset" in reset_message
+    assert json.loads(reset_json)["tts_voice"]["mood"] == "Soft"
+    assert any((tmp_path / "backups").glob("*.json"))
