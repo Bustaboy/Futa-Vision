@@ -14,19 +14,32 @@ Futa-Vision now includes a beginner-friendly Phase 5 installer. The installer is
 
 **Minimal (Recommended, ~6-10 GB)** means: Ostris portable, ComfyUI + essential nodes, Pony V7 (strong all-rounder for futa-on-male), General Physics Base LoRA, and sample characters. If you have limited disk space or slow internet, choose **Skip Models** to install only the framework first, then use **Settings → Model Downloader** later.
 
-### Option A — Recommended Windows setup.bat
+### Option A — Recommended Windows installer
 
-1. Install **Python 3.12 or newer** from <https://www.python.org/downloads/windows/>. During installation, enable **Add python.exe to PATH**.
+1. Install **Python 3.12** from <https://www.python.org/downloads/windows/>. During installation, enable **Add python.exe to PATH**.
 2. Download or clone this repository, then open the Futa-Vision folder in File Explorer.
-3. Double-click `setup.bat`. Keep the console window open while it:
-   - finds Python,
-   - updates `pip`,
-   - installs `requirements.txt`,
-   - runs the Phase 5 installer/repair checks with Minimal as the recommended tier,
-   - runs a quick sample verification,
-   - offers to launch the Gradio app.
-4. When the app opens, go to **⚙️ Settings** and run **Health Check**. The top line should say **All systems ready** or explain what needs attention, such as missing models.
-5. Use **Settings → Model Downloader** to search models by category, read strengths/weaknesses/recommended use cases, and download missing models with progress feedback.
+3. Double-click `FutaVisionSetup.exe` when using a packaged release, or run `python windows_bootstrapper.py` from a source checkout. The visual installer will:
+   - find Python,
+   - create or reuse a local `.venv`,
+   - update `pip`,
+   - install `requirements.txt`,
+   - run the Phase 5 installer/repair checks with Minimal as the recommended tier,
+   - run a quick sample verification,
+   - create a desktop launcher shortcut when setup succeeds,
+   - offer to launch the Gradio app.
+4. The visual installer shows live progress for dependency installs, framework bootstrap, installer checks, and sample verification. Use **Show Logs** to open `logs/installer.log`.
+5. If the visual installer cannot continue, click **Try setup.bat Instead** or run `setup.bat` manually from the same folder. If the app folder is not writable, the installer can restart with administrator rights.
+6. When the app opens, go to **⚙️ Settings** and run **Health Check**. The top line should say **All systems ready** or explain what needs attention, such as missing models.
+7. Use **Settings → Model Downloader** to search models by category, read strengths/weaknesses/recommended use cases, and download missing models with progress feedback.
+
+Packaged release builds should create `FutaVisionSetup.exe` from `windows_bootstrapper.py` with PyInstaller:
+
+```bash
+py -3.12 -m pip install pyinstaller
+py -3.12 -m PyInstaller --onefile --windowed --name FutaVisionSetup windows_bootstrapper.py
+```
+
+The EXE is only a bootstrapper; it keeps the heavy Python, AI, and GPU-specific packages installed in the local `.venv` through the guided setup flow instead of bundling them into one oversized binary.
 
 ### Option B — Pinokio recipe
 
@@ -76,9 +89,9 @@ A successful verification writes a sample image and sample clip/placeholder unde
 - Leave **VRAM safety** enabled. Local generation should start at 720p, retry lower on OOM-like failures, and suggest RunPod for heavier jobs.
 - Use **LTX/speed** or short clips first; save Wan/long-duration/high-upscale jobs for cloud/offload or after the timeline is approved.
 - Close other GPU-heavy apps before generation. Browser video playback, games, OBS, and other AI tools can consume VRAM.
-- If CUDA/PyTorch fails, update NVIDIA drivers, reboot, then rerun `setup.bat` or `python installer.py repair --hardware-check`.
+- If CUDA/PyTorch fails, update NVIDIA drivers, reboot, then rerun `FutaVisionSetup.exe`, `python windows_bootstrapper.py`, or `python installer.py repair --hardware-check`.
 - If ComfyUI nodes or model paths are missing, install them in ComfyUI/Pinokio, set `COMFYUI_PATH` in `.env` if needed, then rerun **Run Installer / Repair Installation**.
-- If the Settings badge is red or the manifest is corrupted, delete or rename `settings/installer_manifest.json` and rerun `setup.bat`; the app also falls back to safe defaults until repair completes.
+- If the Settings badge is red or the manifest is corrupted, delete or rename `settings/installer_manifest.json` and rerun the visual installer; the app also falls back to safe defaults until repair completes.
 
 ## Phase 0 skeleton
 

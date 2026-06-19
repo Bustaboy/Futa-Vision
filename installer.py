@@ -173,7 +173,20 @@ def _load_rich() -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
     )
 
 
+def _configure_stdio_for_installer() -> None:
+    """Prevent display-only Unicode from crashing legacy Windows consoles."""
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                continue
+
+
 box, Console, Panel, Confirm, Prompt, Table, Text, install_rich_traceback = _load_rich()
+_configure_stdio_for_installer()
 CONSOLE = Console()
 LOGGER = logging.getLogger("futa_vision_installer")
 
@@ -475,6 +488,12 @@ def path_text(path: Path | None) -> str:
     return "—" if path is None else str(path)
 
 
+def literal_text(value: Any) -> Any:
+    """Render user/tool output as literal text instead of Rich markup."""
+
+    return Text(str(value))
+
+
 def module_available(name: str) -> bool:
     """Return whether an optional module can be imported."""
 
@@ -492,8 +511,20 @@ def run_command(command: list[str], timeout: int = 30) -> subprocess.CompletedPr
     """
 
     LOGGER.info("Running command: %s", " ".join(command))
+    env = os.environ.copy()
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8:replace")
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
     except (FileNotFoundError, subprocess.SubprocessError, OSError) as exc:
         LOGGER.warning("Command unavailable or failed to start: %s (%s)", command[0], exc)
         return None
@@ -1066,9 +1097,21 @@ def render_model_plan(plan: ModelPlan) -> None:
     for entry in plan.entries:
         default_text = ", ".join(entry.default_for_tier) or "custom"
         status = "download-ready" if model_metadata_complete(entry) else "metadata needed"
-        table.add_row(entry.name, entry.category, f"{entry.size_gb:g} GB", default_text, status)
+        table.add_row(
+            literal_text(entry.name),
+            literal_text(entry.category),
+            literal_text(f"{entry.size_gb:g} GB"),
+            literal_text(default_text),
+            literal_text(status),
+        )
     if not plan.entries:
-        table.add_row("Skip Models", "framework", "0 GB", plan.tier, "models skipped")
+        table.add_row(
+            literal_text("Skip Models"),
+            literal_text("framework"),
+            literal_text("0 GB"),
+            literal_text(plan.tier),
+            literal_text("models skipped"),
+        )
     CONSOLE.print(table)
     size_note = f"Estimated model download: {plan.total_size_gb:g} GB."
     if plan.tier in TIER_SIZE_ESTIMATES_GB:
@@ -1217,10 +1260,10 @@ def render_health_check(result: dict[str, Any]) -> None:
     table.add_column("Action")
     for item in result.get("checks", []):
         table.add_row(
-            str(item.get("name")),
-            str(item.get("status")),
-            str(item.get("detail")),
-            str(item.get("action") or "—"),
+            literal_text(item.get("name")),
+            literal_text(item.get("status")),
+            literal_text(item.get("detail")),
+            literal_text(item.get("action") or "—"),
         )
     CONSOLE.print(table)
 
@@ -2193,11 +2236,23 @@ def render_detection_table(detections: dict[str, list[InstallCandidate]]) -> Non
     for kind, label in labels.items():
         entries = detections.get(kind, [])
         if not entries:
-            table.add_row(label, "[yellow]not found[/yellow]", "—", "—", repair_suggestion_for_kind(kind))
+            table.add_row(
+                literal_text(label),
+                "[yellow]not found[/yellow]",
+                literal_text("—"),
+                literal_text("—"),
+                literal_text(repair_suggestion_for_kind(kind)),
+            )
             continue
         for index, entry in enumerate(entries):
             status = "[green]found[/green]" if index == 0 else "[blue]also found[/blue]"
-            table.add_row(label if index == 0 else "", status, str(entry.path), entry.source, entry.details)
+            table.add_row(
+                literal_text(label if index == 0 else ""),
+                status,
+                literal_text(entry.path),
+                literal_text(entry.source),
+                literal_text(entry.details),
+            )
     CONSOLE.print(table)
 
 
@@ -2207,16 +2262,22 @@ def render_hardware_report(report: HardwareReport) -> None:
     table = Table(title="Hardware profile", box=box.SIMPLE_HEAVY)
     table.add_column("Field", style="bold")
     table.add_column("Value")
-    table.add_row("Platform", report.platform)
-    table.add_row("Python", report.python_version)
-    table.add_row("Torch importable", "yes" if report.torch_available else "no")
-    table.add_row("GPU", report.gpu.name)
-    table.add_row("CUDA", "yes" if report.gpu.cuda_available else "no")
-    table.add_row("VRAM", "unknown" if report.gpu.total_vram_gb is None else f"{report.gpu.total_vram_gb} GB")
-    table.add_row("Free VRAM", "unknown" if report.gpu.free_vram_gb is None else f"{report.gpu.free_vram_gb} GB")
-    table.add_row("Cache free", f"{report.cache_free_gb} GB")
-    table.add_row("Recommended profile", f"[bold]{report.recommended_profile.value}[/bold]")
-    table.add_row("Reason", report.profile_reason)
+    table.add_row(literal_text("Platform"), literal_text(report.platform))
+    table.add_row(literal_text("Python"), literal_text(report.python_version))
+    table.add_row(literal_text("Torch importable"), literal_text("yes" if report.torch_available else "no"))
+    table.add_row(literal_text("GPU"), literal_text(report.gpu.name))
+    table.add_row(literal_text("CUDA"), literal_text("yes" if report.gpu.cuda_available else "no"))
+    table.add_row(
+        literal_text("VRAM"),
+        literal_text("unknown" if report.gpu.total_vram_gb is None else f"{report.gpu.total_vram_gb} GB"),
+    )
+    table.add_row(
+        literal_text("Free VRAM"),
+        literal_text("unknown" if report.gpu.free_vram_gb is None else f"{report.gpu.free_vram_gb} GB"),
+    )
+    table.add_row(literal_text("Cache free"), literal_text(f"{report.cache_free_gb} GB"))
+    table.add_row(literal_text("Recommended profile"), f"[bold]{report.recommended_profile.value}[/bold]")
+    table.add_row(literal_text("Reason"), literal_text(report.profile_reason))
     CONSOLE.print(table)
 
     if report.profile_settings:
@@ -2224,12 +2285,20 @@ def render_hardware_report(report: HardwareReport) -> None:
         settings.add_column("Setting", style="bold")
         settings.add_column("Default")
         for key, value in report.profile_settings.items():
-            settings.add_row(key.replace("_", " ").title(), value)
+            settings.add_row(literal_text(key.replace("_", " ").title()), literal_text(value))
         CONSOLE.print(settings)
     if report.recommendations:
-        CONSOLE.print(Panel("\n".join(f"• {item}" for item in report.recommendations), title="Recommendations", border_style="green"))
+        CONSOLE.print(Panel(
+            literal_text("\n".join(f"• {item}" for item in report.recommendations)),
+            title="Recommendations",
+            border_style="green",
+        ))
     if report.warnings:
-        CONSOLE.print(Panel("\n".join(f"• {item}" for item in report.warnings), title="Warnings", border_style="yellow"))
+        CONSOLE.print(Panel(
+            literal_text("\n".join(f"• {item}" for item in report.warnings)),
+            title="Warnings",
+            border_style="yellow",
+        ))
 
 
 def repair_suggestion_for_kind(kind: str) -> str:
@@ -2416,11 +2485,11 @@ def render_repair_suggestions(detections: dict[str, list[InstallCandidate]], rep
     table.add_column("Command")
     for item in suggestions:
         table.add_row(
-            item.area,
-            item.severity,
-            item.symptom,
-            "\n".join(f"• {action}" for action in item.actions),
-            item.command or "—",
+            literal_text(item.area),
+            literal_text(item.severity),
+            literal_text(item.symptom),
+            literal_text("\n".join(f"• {action}" for action in item.actions)),
+            literal_text(item.command or "—"),
         )
     CONSOLE.print(table)
 
@@ -2847,7 +2916,8 @@ def render_repair_action_results(results: list[RepairActionResult]) -> None:
     table.add_column("Status")
     table.add_column("Details")
     for result in results:
-        table.add_row(result.action, result.status, "\n".join(str(item) for item in result.details) or "—")
+        detail = "\n".join(str(item) for item in result.details) or "—"
+        table.add_row(literal_text(result.action), literal_text(result.status), literal_text(detail))
     CONSOLE.print(table)
 
 
@@ -2980,7 +3050,11 @@ def main(argv: list[str] | None = None) -> int:
         result = int(args.func(args))
     except InstallerError as exc:
         LOGGER.error("Installer stopped: %s", exc)
-        CONSOLE.print(Panel(f"{exc}\n\nTroubleshooting log: {LOG_PATH}", title="Installer stopped", border_style="red"))
+        CONSOLE.print(Panel(
+            literal_text(f"{exc}\n\nTroubleshooting log: {LOG_PATH}"),
+            title="Installer stopped",
+            border_style="red",
+        ))
         return 2
     except KeyboardInterrupt:
         LOGGER.warning("Installer cancelled by user")
@@ -2988,7 +3062,11 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     except Exception:
         LOGGER.exception("Unexpected installer failure")
-        CONSOLE.print(Panel(f"Unexpected installer failure. See troubleshooting log: {LOG_PATH}", title="Installer error", border_style="red"))
+        CONSOLE.print(Panel(
+            literal_text(f"Unexpected installer failure. See troubleshooting log: {LOG_PATH}"),
+            title="Installer error",
+            border_style="red",
+        ))
         raise
     LOGGER.info("Installer command completed with exit code %s", result)
     return result

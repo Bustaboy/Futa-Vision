@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 import installer
 
@@ -107,6 +110,42 @@ def test_run_health_check_has_simple_top_line(monkeypatch) -> None:
     assert result["status"] == "needs_attention"
     assert result["summary"].startswith("⚠️")
     assert any(check["name"] == "Models" for check in result["checks"])
+
+
+def test_repair_action_results_render_literal_failed_command_output(monkeypatch) -> None:
+    rich_console = pytest.importorskip("rich.console")
+    console = rich_console.Console(record=True, width=120)
+    failing_stderr = "ComfyUI bootstrap failed\n[/bold  |\n|       green]\nUse [safe] literal output."
+    result = installer.RepairActionResult("ComfyUI portable", "failed", [failing_stderr])
+
+    monkeypatch.setattr(installer, "CONSOLE", console)
+
+    installer.render_repair_action_results([result])
+
+    rendered = console.export_text()
+    assert "ComfyUI portable" in rendered
+    assert "[/bold" in rendered
+    assert "[safe]" in rendered
+
+
+def test_run_command_uses_utf8_subprocess_io(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(command: list[str], **kwargs: Any) -> installer.subprocess.CompletedProcess[str]:
+        captured.update(kwargs)
+        return installer.subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+
+    completed = installer.run_command(["python", "-m", "comfy_cli"])
+
+    assert completed is not None
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+    assert captured["env"]["PYTHONUTF8"] == "1"
+    assert captured["env"]["PYTHONIOENCODING"] == "utf-8:replace"
 
 
 def test_diagnostics_export_redacts_env_secrets(tmp_path: Path, monkeypatch) -> None:
